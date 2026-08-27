@@ -21,8 +21,8 @@ export const meta = {
     { title: '准备' },
     { title: 'L1 静态扫描' },
     { title: 'L2 语义审计' },
-    { title: 'L3 PoC复现' },
-    { title: 'L4 复核清单' },
+    { title: 'L3 PoC 复现' },
+    { title: 'L4 复核与归档' },
   ],
 }
 
@@ -561,7 +561,7 @@ async function l3Stage(l2Out, target, skipL3) {
     return { ...l2Out, pocResults: [] }
   }
   const pocResults = await parallel(
-    needsEvidence.map(f => () => agent(pocPrompt(target, f, l2Out.l1), { phase: 'L3 PoC复现', schema: POC_SCHEMA, label: `L3-PoC:${target}:${f.title}`, effort: 'high' }))
+    needsEvidence.map(f => () => agent(pocPrompt(target, f, l2Out.l1), { phase: 'L3 PoC 复现', schema: POC_SCHEMA, label: `L3-PoC:${target}:${f.title}`, effort: 'high' }))
   )
   return { ...l2Out, pocResults: pocResults.filter(Boolean) }
 }
@@ -572,14 +572,14 @@ async function l3Stage(l2Out, target, skipL3) {
 async function l4Stage(l3Out, target) {
   if (!l3Out) return null
   const gate = computeGates(l3Out.l1, l3Out.confirmedFindings, l3Out.pocResults)
-  const report = await agent(reportPrompt(target, l3Out, gate), { phase: 'L4 复核清单', schema: REPORT_SCHEMA, label: `L4-报告:${target}` })
+  const report = await agent(reportPrompt(target, l3Out, gate), { phase: 'L4 复核与归档', schema: REPORT_SCHEMA, label: `L4-报告:${target}` })
   return { target, gate, confirmedFindings: l3Out.confirmedFindings, pocResults: l3Out.pocResults, report }
 }
 
 // ===========================================================================
 // 主流程
 // ===========================================================================
-async function runAuditPipeline() {
+export async function runAuditPipeline() {
 phase('准备')
 const context = await agent(contextPrompt(), { label: '加载审计上下文' })
 
@@ -611,18 +611,27 @@ log(`L1 完成：High ${l1.highCount} / Medium ${l1.mediumCount} / Low ${l1.lowC
 // L2 → L3 → L4：以"目标合约"为流水线单元，逐合约独立推进，不设跨合约屏障——
 // 合约A在做L3 PoC时，合约B可能已经在跑L2下一个专项，wall-clock取决于最慢的单条合约链路。
 phase('L2 语义审计')
-const perTarget = await pipeline(
+const l2Results = await pipeline(
   targets,
-  target => l2Stage(target, l1, context, categories),
-  (l2Out, target) => l3Stage(l2Out, target, skipL3),
-  (l3Out, target) => l4Stage(l3Out, target)
+  target => l2Stage(target, l1, context, categories)
+)
+
+phase('L3 PoC 复现')
+const l3Results = await pipeline(
+  l2Results,
+  l2Out => l3Stage(l2Out, l2Out && l2Out.target, skipL3)
+)
+
+phase('L4 复核与归档')
+const perTarget = await pipeline(
+  l3Results,
+  l3Out => l4Stage(l3Out, l3Out && l3Out.target)
 )
 
 const valid = perTarget.filter(Boolean)
 const droppedTargets = targets.length - valid.length
 if (droppedTargets > 0) log(`⚠️ ${droppedTargets}/${targets.length} 个目标合约在流水线某阶段失败，已跳过，未计入最终报告`)
 
-phase('L4 复核清单')
 const globalReport = await agent(globalSynthesisPrompt(valid, l1), { schema: GLOBAL_SCHEMA, label: 'L4-总报告' })
 
 log(`审计完成：${valid.length}/${targets.length} 个合约走完全流程，readyForDelivery=${globalReport.readyForDelivery}`)
@@ -634,6 +643,8 @@ return {
 }
 }
 
-if (typeof phase === 'function' && typeof agent === 'function') {
-  await runAuditPipeline()
-}
+export const workflowResult = typeof phase === 'function' && typeof agent === 'function'
+  ? await runAuditPipeline()
+  : undefined
+
+export default workflowResult
