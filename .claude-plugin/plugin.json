@@ -1,0 +1,20 @@
+{
+  "name": "smart-contract-audit-toolkit",
+  "displayName": "Smart Contract Audit Toolkit",
+  "description": "智能合约四层 AI 审计工具集：确定性静态扫描 + LLM 语义审计（四角色对抗）+ PoC 复现验证 + 不变量深度模糊测试 + Halmos 有界形式化验证，面向 Hardhat 项目的内部全审计流水线。",
+  "version": "0.1.0",
+  "author": {
+    "name": "yfq"
+  },
+  "license": "MIT",
+  "keywords": [
+    "smart-contract",
+    "security-audit",
+    "solidity",
+    "slither",
+    "echidna",
+    "medusa",
+    "halmos",
+    "hardhat"
+  ]
+}
