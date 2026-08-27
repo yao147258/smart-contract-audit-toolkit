@@ -15,7 +15,7 @@
 
 export const meta = {
   name: 'smart-contract-audit-pipeline',
-  description: '智能合约四层AI审计流水线：L1确定性静态扫描 → L2 LLM语义审计(四角色对抗×多专项) → L3 PoC复现验证 → L4人工复核清单',
+  description: '智能合约四层AI审计流水线：L1确定性静态扫描 → L2 LLM语义审计(四角色对抗×10专项) → L3 PoC复现验证 → L4人工复核清单',
   whenToUse: '合约代码开发自测通过后、交付业务测试/上线前，需要跑一遍内部全审计（硬性前置）时使用；也可用 args.targets 只审某几个改动的合约做增量审计。',
   phases: [
     { title: '准备' },
@@ -201,14 +201,14 @@ const GLOBAL_SCHEMA = {
   type: 'object',
   properties: {
     overview: { type: 'string' },
-    readyForP6: { type: 'boolean', description: '是否满足交付P6测试的门禁（不代表最终放行，仅供人工参考）' },
+    readyForDelivery: { type: 'boolean', description: '是否满足交付业务测试的门禁（不代表最终放行，仅供人工参考）' },
     blockingItems: { type: 'array', items: { type: 'string' } },
     perTargetGate: {
       type: 'array',
       items: { type: 'object', properties: { target: { type: 'string' }, gatePass: { type: 'boolean' } }, required: ['target', 'gatePass'] },
     },
   },
-  required: ['overview', 'readyForP6'],
+  required: ['overview', 'readyForDelivery'],
 }
 
 // ---------------------------------------------------------------------------
@@ -359,8 +359,8 @@ L1 全局数据：highCount=${l1.highCount}, mediumCount=${l1.mediumCount}, gate
 
 任务：
 1. overview：用几句话概述本轮审计整体风险状况；
-2. readyForP6：只有当"L1 High 清零"且"每条 Critical/High 都有 PoC 结论或书面闭环"时才为 true，否则 false（这只是给人的参考信号，不是自动放行）；
-3. blockingItems：列出阻止交付 P6 测试的具体条目（对应哪个合约、哪条发现）；
+2. readyForDelivery：只有当"L1 High 清零"且"每条 Critical/High 都有 PoC 结论或书面闭环"时才为 true，否则 false（这只是给人的参考信号，不是自动放行）；
+3. blockingItems：列出阻止交付业务测试的具体条目（对应哪个合约、哪条发现）；
 4. perTargetGate：每个合约的 gate.gatePass 汇总列表。
 严格按 schema 返回 JSON。`
 }
@@ -481,7 +481,7 @@ if (droppedTargets > 0) log(`⚠️ ${droppedTargets}/${targets.length} 个目�
 phase('L4 复核清单')
 const globalReport = await agent(globalSynthesisPrompt(valid, l1), { schema: GLOBAL_SCHEMA, label: 'L4-总报告' })
 
-log(`审计完成：${valid.length}/${targets.length} 个合约走完全流程，readyForP6=${globalReport.readyForP6}`)
+log(`审计完成：${valid.length}/${targets.length} 个合约走完全流程，readyForDelivery=${globalReport.readyForDelivery}`)
 
 return {
   l1,

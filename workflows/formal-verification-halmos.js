@@ -22,7 +22,7 @@
 export const meta = {
   name: 'formal-verification-halmos',
   description: '对人工指定的核心数学模块（AMM曲线/清算/份额舍入等）用 Halmos 做有界符号执行证明，属于可选的 L4-plus 加强层',
-  whenToUse: '核心数学模块新增或改动后、上线前 T-1 月，或人工判断某个公式类模块需要数学级别保证时手动触发；modules 必须由人工显式指定，不做自动发现。',
+  whenToUse: '核心数学模块新增或改动后、上线前，或人工判断某个公式类模块需要数学级别保证时手动触发；modules 必须由人工显式指定，不做自动发现。',
   phases: [
     { title: '准备' },
     { title: '规格设计' },

@@ -17,6 +17,8 @@
 /plugin install smart-contract-audit-toolkit@smart-contract-audit-toolkit
 ```
 
+> Dynamic Workflows 需要 Claude Code v2.1.154 及以上；插件内打包 workflow（本插件依赖的能力）是 2026-08-17 前后随新版本上线的，建议使用当时或更新的 Claude Code 版本。
+
 安装完成后三个工作流可用（按命名空间 `插件名:workflow名` 调用）：
 
 ```

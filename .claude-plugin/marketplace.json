@@ -8,6 +8,7 @@
     {
       "name": "smart-contract-audit-toolkit",
       "source": "./",
+      "version": "0.1.0",
       "description": "智能合约四层 AI 审计工具集：确定性静态扫描 + LLM 语义审计 + PoC 复现验证 + 不变量深度模糊测试 + Halmos 形式化验证"
     }
   ]

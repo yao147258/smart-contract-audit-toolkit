@@ -39,6 +39,7 @@ description: 在智能合约仓库（Hardhat 项目）里做安全审计相关�
 
 - 目标仓库需是 Hardhat 项目（`contracts/`、`test/` 目录结构）。
 - 三个 workflow 依赖的外部工具（slither / aderyn / echidna / medusa / halmos）均为可选：脚本会实地检测是否已安装，装不上会在报告里如实说明"工具不可用"并给出原因，绝不会编造扫描/证明结果。
+- Dynamic Workflows 需要 Claude Code v2.1.154 及以上；插件内打包 workflow（本插件依赖的能力）是 2026-08-17 前后随新版本上线的，建议使用当时或更新的 Claude Code 版本。
 
 ## `.audit/` 目录约定
 
