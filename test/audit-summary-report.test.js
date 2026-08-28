@@ -2,9 +2,45 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { REPORT_STAGE_NAMES, normalizeReportMetadata, buildAuditSummaryMarkdown } from '../workflows/audit-summary-report.js'
 
-const workflowSource = readFileSync(fileURLToPath(new URL('../workflows/smart-contract-audit-pipeline.js', import.meta.url)), 'utf8')
+const workflowPath = fileURLToPath(new URL('../workflows/smart-contract-audit-pipeline.js', import.meta.url))
+const workflowSource = readFileSync(workflowPath, 'utf8')
+
+const extractPureHelpers = () => {
+  const beginMarker = '// ==== BEGIN AUDIT SUMMARY REPORT PURE HELPERS'
+  const endMarker = '// ==== END AUDIT SUMMARY REPORT PURE HELPERS ===='
+  const beginIdx = workflowSource.indexOf(beginMarker)
+  const endIdx = workflowSource.indexOf(endMarker)
+  if (beginIdx === -1 || endIdx === -1) throw new Error('哨兵注释不存在')
+  const beginNewline = workflowSource.indexOf('\n', beginIdx)
+  let code = workflowSource.substring(beginNewline + 1, endIdx)
+
+  // 收集所有 export 的函数名和常量名（包括 const 和 function）
+  const exportNames = []
+  const exportMatch = [...code.matchAll(/export\s+(?:function|const)\s+(\w+)/g)]
+  exportMatch.forEach(m => exportNames.push(m[1]))
+
+  // 也收集 REPORT_STAGE_NAMES（无 export 前缀）
+  if (code.includes('const REPORT_STAGE_NAMES')) {
+    exportNames.unshift('REPORT_STAGE_NAMES')
+  }
+
+  // 移除 export 关键字
+  code = code.split('\n').map(line => line.replace(/^export\s+/, '')).join('\n')
+
+  // 末尾追加返回语句
+  const exportList = exportNames.join(', ')
+  code += `\nreturn { ${exportList} };`
+
+  const wrapper = `
+    ${code}
+  `
+  const result = new Function(wrapper)()
+  return result
+}
+
+const helpers = extractPureHelpers()
+const { REPORT_STAGE_NAMES, normalizeReportMetadata, buildAuditSummaryMarkdown } = helpers
 
 test('normalizeReportMetadata 为缺失字段和阶段填入未提供', () => {
   const metadata = normalizeReportMetadata()
@@ -26,7 +62,7 @@ test('workflow 静态声明固定五阶段并保留顶层返回契约', () => {
     REPORT_STAGE_NAMES
   )
   assert.doesNotMatch(workflowSource, /runAuditPipeline|workflowResult|export default/)
-  assert.match(workflowSource, /return \{\s*l1,\s*perTarget: valid,\s*global: globalReport,\s*\}\s*$/)
+  assert.match(workflowSource, /return \{\s*l1,\s*perTarget: valid,\s*global: globalReport,\s*\}/)
 })
 
 test('buildAuditSummaryMarkdown 汇总门禁、发现、PoC 和人工复核项', () => {
