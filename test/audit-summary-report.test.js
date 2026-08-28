@@ -40,7 +40,7 @@ const extractPureHelpers = () => {
 }
 
 const helpers = extractPureHelpers()
-const { REPORT_STAGE_NAMES, normalizeReportMetadata, buildAuditSummaryMarkdown } = helpers
+const { REPORT_STAGE_NAMES, normalizeReportMetadata, buildAuditSummaryMarkdown, archivePrompt } = helpers
 
 test('normalizeReportMetadata 为缺失字段和阶段填入未提供', () => {
   const metadata = normalizeReportMetadata()
@@ -62,7 +62,7 @@ test('workflow 静态声明固定五阶段并保留顶层返回契约', () => {
     REPORT_STAGE_NAMES
   )
   assert.doesNotMatch(workflowSource, /runAuditPipeline|workflowResult|export default/)
-  assert.match(workflowSource, /return \{\s*l1,\s*perTarget: valid,\s*global: globalReport,\s*\}/)
+  assert.match(workflowSource, /return \{\s*l1,\s*perTarget: valid,\s*global: globalReport,\s*archive,\s*\}/)
 })
 
 test('buildAuditSummaryMarkdown 汇总门禁、发现、PoC 和人工复核项', () => {
@@ -103,4 +103,14 @@ test('buildAuditSummaryMarkdown 汇总门禁、发现、PoC 和人工复核项',
   assert.match(markdown, /余额差分成立/)
   assert.match(markdown, /确认多签控制人/)
   assert.match(markdown, /不是最终放行结论/)
+})
+
+test('archivePrompt 要求将最终报告覆盖写入固定路径并如实返回状态', () => {
+  const prompt = archivePrompt('# 示例报告')
+
+  assert.match(prompt, /\.audit\/reports\/audit-latest\.md/)
+  assert.match(prompt, /覆盖写/)
+  assert.match(prompt, /不得编造/)
+  assert.match(prompt, /写入成功后.*Written/)
+  assert.match(prompt, /写入失败.*Failed/)
 })

@@ -169,6 +169,25 @@ export function buildAuditSummaryMarkdown(input = {}) {
   lines.push('', '## 免责声明', '', '本报告仅汇总自动化审计流水线的观测结果、候选发现、PoC 证据和 L4 人工复核事项。AI 不代替人工签字，不直接写入误报库、豁免库或回归目录；本报告不是最终放行结论。')
   return lines.join('\n')
 }
+
+const ARCHIVE_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', description: 'Written 或 Failed' },
+    path: { type: 'string' },
+    error: { type: 'string' },
+  },
+  required: ['status', 'path'],
+}
+
+export function archivePrompt(markdown) {
+  return `把以下已经生成的审计总报告原样覆盖写入目标仓库的 .audit/reports/audit-latest.md。
+若目录不存在，创建 .audit/reports/；不要修改任何其他文件，不要重写或概括报告，不得编造写入成功。
+写入成功后返回 {"status":"Written","path":".audit/reports/audit-latest.md"}；写入失败后返回 {"status":"Failed","path":".audit/reports/audit-latest.md","error":"真实失败原因"}。
+
+报告内容：
+${markdown}`
+}
 // ==== END AUDIT SUMMARY REPORT PURE HELPERS ====
 
 // 每次只审一个专项、禁止跨类报告，用以降低单次扫描的误报率）
@@ -635,8 +654,27 @@ const globalReport = await agent(globalSynthesisPrompt(valid, l1), { schema: GLO
 
 log(`审计完成：${valid.length}/${targets.length} 个合约走完全流程，readyForDelivery=${globalReport.readyForDelivery}`)
 
+const summaryMarkdown = buildAuditSummaryMarkdown({
+  metadata: args && args.metadata,
+  targets,
+  categories,
+  skipL3,
+  l1,
+  perTarget: valid,
+  global: globalReport,
+})
+const archive = await agent(archivePrompt(summaryMarkdown), {
+  phase: 'L4 复核与归档',
+  schema: ARCHIVE_SCHEMA,
+  label: 'L4-归档总报告',
+})
+if (!archive || archive.status !== 'Written') {
+  log(`⚠️ 审计总报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
+}
+
 return {
   l1,
   perTarget: valid,
   global: globalReport,
+  archive,
 }
