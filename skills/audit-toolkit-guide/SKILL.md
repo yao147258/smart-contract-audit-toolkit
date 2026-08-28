@@ -49,7 +49,10 @@ description: 在智能合约仓库（Hardhat 项目）里做安全审计相关�
 - `.audit/false-positives.md` —— 已确认误报库
 - `.audit/exemptions.md` —— 书面豁免记录
 - `.audit/regression/` —— PoC/反例回归测试永久保留目录
-- `.audit/reports/` —— L1 扫描原始报告
+- `.audit/reports/` —— L1 扫描原始报告与 `audit-latest.md` 审计总报告
+- `.audit/reports/audit-latest.md` —— 本轮 L1–L4 的整体汇总、门禁、PoC、人工复核项和可选元信息；每次运行覆盖更新
+
+`smart-contract-audit-pipeline` 会生成 `.audit/reports/audit-latest.md`；审查时间、模型、审查人和阶段耗时仅在调用方显式通过 `args.metadata` 传入时记录，未传入的一律显示"未提供"。
 
 ## 重要边界
 

@@ -57,6 +57,33 @@
 
 调用时用自然语言描述意图即可，Claude 会自动解析成脚本内的结构化 `args`。
 
+### 审计元信息与总报告
+
+每轮 `smart-contract-audit-pipeline` 完成后会覆盖生成 `.audit/reports/audit-latest.md`。它包含整体门禁、逐合约发现与 PoC、人工复核事项，以及可选的审查元信息和阶段耗时。
+
+需要记录元信息时，将其作为 workflow 的 `args.metadata` 传入：
+
+```js
+{
+  metadata: {
+    startedAt: '2026-08-27T10:00:00+08:00',
+    endedAt: '2026-08-27T10:05:00+08:00',
+    totalDuration: '5m 0s',
+    model: 'claude-opus-5',
+    reviewer: '安全团队',
+    stages: [
+      { name: '准备', startedAt: '...', endedAt: '...', duration: '10s', status: '完成' },
+      { name: 'L1 静态扫描', startedAt: '...', endedAt: '...', duration: '40s', status: '完成' },
+      { name: 'L2 语义审计', startedAt: '...', endedAt: '...', duration: '3m', status: '完成' },
+      { name: 'L3 PoC 复现', startedAt: '...', endedAt: '...', duration: '1m', status: '完成' },
+      { name: 'L4 复核与归档', startedAt: '...', endedAt: '...', duration: '10s', status: '完成' }
+    ]
+  }
+}
+```
+
+未传入的字段统一显示为"未提供"；插件不会推断实际模型、审查人或执行时间。
+
 ## `.audit/` 目录约定
 
 三个工作流共享的持久化状态目录，`smart-contract-audit-pipeline` 的 L1 阶段会在目录不存在时自动建骨架，插件本身不携带模板文件：
@@ -65,7 +92,8 @@
 - `.audit/false-positives.md` —— 已确认误报库
 - `.audit/exemptions.md` —— 书面豁免记录
 - `.audit/regression/` —— PoC/反例回归测试永久保留目录
-- `.audit/reports/` —— L1 扫描原始报告
+- `.audit/reports/` —— L1 扫描原始报告与 `audit-latest.md` 审计总报告
+- `.audit/reports/audit-latest.md` —— 本轮 L1–L4 的整体汇总、门禁、PoC、人工复核项和可选元信息；每次运行覆盖更新
 
 ## 免责声明
 
