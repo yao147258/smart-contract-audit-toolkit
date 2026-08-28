@@ -59,7 +59,9 @@
 
 ### 审计元信息与总报告
 
-每轮 `smart-contract-audit-pipeline` 完成后会覆盖生成 `.audit/reports/audit-latest.md`。它包含整体门禁、逐合约发现与 PoC、人工复核事项，以及可选的审查元信息和阶段耗时。
+每轮 `smart-contract-audit-pipeline` 正常走完流程后，会覆盖生成 `.audit/reports/audit-latest.md`。它包含整体门禁、逐合约发现与 PoC、人工复核事项，以及可选的审查元信息和阶段耗时。
+
+有两种情况不会生成该文件：一是没有发现任何审计目标合约（流程在 L1 之前就早退），二是归档 agent 自身写入失败。工作流的返回值中新增了 `archive: { status, path, error }` 字段：归档失败时会在日志中告警（`⚠️ 审计总报告归档失败：…`），并把失败状态与原因如实记录在这个字段里，不会影响 `l1` / `perTarget` / `global` 这三个已经算好的结果，也不会改变任何门禁结论。
 
 需要记录元信息时，将其作为 workflow 的 `args.metadata` 传入：
 
