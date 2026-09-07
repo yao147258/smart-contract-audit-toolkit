@@ -86,6 +86,18 @@
 
 未传入的字段统一显示为"未提供"；插件不会推断实际模型、审查人或执行时间。
 
+### 不变量模糊测试报告
+
+每轮 `invariant-fuzz-campaign` 正常走完流程后，会覆盖生成 `.audit/reports/invariant-fuzz-latest.md`。内容包含本轮运行参数（引擎/轮数/时间预算）、概览、阻断项（Falsified）、逐不变量结果，以及每条不变量按引擎展开的明细（状态、调用次数、反例、corpus 目录）。
+
+和总报告一样，归档失败（写入异常、路径不符、内容被概括/截断）只会在返回值的 `archive: { status, path, writtenLength?, error? }` 字段里如实记录、并触发 `log()` 告警，不会影响 `invariants` / `global` 这两个已经算好的结果。
+
+### Halmos 形式化验证报告
+
+每轮 `formal-verification-halmos` 正常走完流程后，会覆盖生成 `.audit/reports/halmos-verification-latest.md`。内容包含 loopBound、概览、阻断项（Counterexample）、未证明项（Inconclusive/ToolUnavailable）、逐模块结果，以及每个模块按性质展开的证明明细（边界假设、反例、回归测试路径）。
+
+归档行为与前两个报告一致：失败只记录在返回值的 `archive` 字段里，不影响 `modules` / `global` 的结果。
+
 ## `.audit/` 目录约定
 
 三个工作流共享的持久化状态目录，`smart-contract-audit-pipeline` 的 L1 阶段会在目录不存在时自动建骨架，插件本身不携带模板文件：
@@ -94,8 +106,10 @@
 - `.audit/false-positives.md` —— 已确认误报库
 - `.audit/exemptions.md` —— 书面豁免记录
 - `.audit/regression/` —— PoC/反例回归测试永久保留目录
-- `.audit/reports/` —— L1 扫描原始报告与 `audit-latest.md` 审计总报告
-- `.audit/reports/audit-latest.md` —— 本轮 L1–L4 的整体汇总、门禁、PoC、人工复核项和可选元信息；每次运行覆盖更新
+- `.audit/reports/` —— L1 扫描原始报告与三个工作流各自的 `-latest.md` 汇总报告
+- `.audit/reports/audit-latest.md` —— `smart-contract-audit-pipeline` 本轮 L1–L4 的整体汇总、门禁、PoC、人工复核项和可选元信息；每次运行覆盖更新
+- `.audit/reports/invariant-fuzz-latest.md` —— `invariant-fuzz-campaign` 本轮不变量模糊测试结果（Falsified/PassedThisRound/Skipped）；每次运行覆盖更新
+- `.audit/reports/halmos-verification-latest.md` —— `formal-verification-halmos` 本轮 Halmos 有界证明结果（Proved/Counterexample/Inconclusive）；每次运行覆盖更新
 
 ## 免责声明
 
