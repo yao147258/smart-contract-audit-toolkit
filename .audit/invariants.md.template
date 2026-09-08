@@ -1,0 +1,96 @@
+# 系统不变量清单
+
+本文件定义了项目核心合约中应该始终成立的系统性质（不变量）。
+这些不变量构成了 `invariant-fuzz-campaign` workflow 长程模糊测试的基础。
+
+> **使用说明**：
+> - 状态列：`进行中` = 正常；`跳过` = 本轮 fuzz 不验证（通常因为装置未就绪或该不变量暂时无法自动验证）；`N/A` = 不适用（如仅在某些条件下成立）
+> - 检验方式：函数名遵循 echidna 约定，即 `invariant_*` 前缀，返回 bool
+> - 所有不变量必须在"无恶意交易"的假设下成立；如果允许某些异常情况，请在备注中明确说明
+
+## 示例格式说明
+
+| ID | 合约 | 描述 | 类别 | 检验方式 | 状态 | 备注 |
+|---|---|---|---|---|---|---|
+| INV-01 | Token | 总代币供应量 = sum(所有用户余额) | conservation | invariant_total_supply | 进行中 | ERC20 标准守恒性；fuzz 策略：任意 mint/burn/transfer 操作 |
+| INV-02 | Vault | 金库锁定资产 ≥ 总债务 | state-consistency | invariant_solvency | 进行中 | 防止流动性风险；需要跨合约状态检查 |
+| INV-03 | Token | 用户余额 ≥ 0（非负） | invariant-property | invariant_non_negative_balance | 进行中 | 基本属性；应该无法通过任何合法操作违反 |
+| INV-04 | AMM | 常数乘积 k = x*y（在 swap 时保持或增加） | boundary | invariant_constant_product | 跳过 | 需要装置补充：初始流动性部署逻辑复杂，先跑其他不变量 |
+
+## 实际不变量（待补充）
+
+| ID | 合约 | 描述 | 类别 | 检验方式 | 状态 | 备注 |
+|---|---|---|---|---|---|---|
+| - | - | - | - | - | - | 本清单由 `generate-invariants-template` 初始生成，请根据项目具体情况补充 |
+
+## 不变量编写建议
+
+### 守恒型 (conservation)
+**特点**：某种资源/总量必须守恒
+
+**示例**：
+- 代币总供应量 = sum(所有账户余额)
+- 交易所流动性池的 token A 总量不变
+
+**检验函数**：
+```solidity
+function invariant_total_supply() public {
+    assert(token.totalSupply() == sumAllBalances());
+}
+```
+
+### 状态一致型 (state-consistency)
+**特点**：不同状态变量间必须满足的约束
+
+**示例**：
+- 金库保存的抵押品 ≥ 发行的债务
+- nonce 单调递增
+
+**检验函数**：
+```solidity
+function invariant_solvency() public {
+    assert(vault.collateral() >= vault.debt());
+}
+```
+
+### 不变性质 (invariant-property)
+**特点**：某个状态属性必须恒真
+
+**示例**：
+- 用户余额非负
+- 费率 ∈ [0%, 100%]
+
+**检验函数**：
+```solidity
+function invariant_non_negative_balance() public {
+    // 遍历所有已知账户检查余额
+    for (uint i = 0; i < allUsers.length; i++) {
+        assert(balances[allUsers[i]] >= 0);
+    }
+}
+```
+
+### 边界条件 (boundary)
+**特点**：允许的最大/最小值约束
+
+**示例**：
+- 手续费不超过交易金额
+- 清算参数在合理范围内
+
+**检验函数**：
+```solidity
+function invariant_max_fee_ratio() public {
+    assert(feeRatio <= MAX_FEE); // MAX_FEE = 10%
+}
+```
+
+## 注意事项
+
+1. **可检验性**：不变量必须能用 `assert()` 在 Solidity 中直接验证，不应依赖外部数据源（除非有 Oracle Mock）
+2. **独立性**：避免不变量互相冗余；比如同时检验 "sum(balances) == totalSupply" 和 "specific_user.balance == X" 就是冗余的
+3. **重要性**：只记录真正关键的性质，避免琐碎细节；比如 "每笔交易必须成功" 这样自证的性质不应该在这里
+4. **复杂性**：如果不变量涉及复杂的 fixture（比如需要先部署某些合约、设定特定的初始状态），标记为 `跳过` 并在备注中说明，让人工在装置代码里单独处理
+
+## 历史更新
+
+- 2026-09-08：初始生成（通过 `generate-invariants-template` workflow）
