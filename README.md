@@ -1,9 +1,10 @@
 # smart-contract-audit-toolkit
 
-面向 Hardhat 智能合约项目的内部全审计工具集，打包成 Claude Code 插件分发。包含三个互相独立、可组合使用的 [Dynamic Workflow](https://code.claude.com/docs/en/workflows)：
+面向 Hardhat 智能合约项目的内部全审计工具集，打包成 Claude Code 插件分发。包含四个互相独立、可组合使用的 [Dynamic Workflow](https://code.claude.com/docs/en/workflows)：
 
 | Workflow | 找什么 | 证明方式 | 什么时候用 |
 |---|---|---|---|
+| `generate-invariants-template` | 识别系统核心不变量 | 代码分析 + LLM 智能识别 | 项目初期、首次使用 fuzz 之前，或合约架构大改后 |
 | `invariant-fuzz-campaign` | 组合型漏洞：多笔调用序列才会触发的状态不一致 | Echidna + Medusa 无边界随机模糊测试 | 核心状态机相关合约较大改动后，或按周（建议）跑一次深度 fuzz |
 | `smart-contract-audit-pipeline` | 语义类漏洞：重入、权限、精度、预言机、业务逻辑偏差等 10 大专项 | L1 静态扫描 + L2 四角色对抗（🔵审计员/🔴攻击者/🟢修复工程师/⚖️裁判）+ L3 PoC 复现 | 默认入口，合约开发自测通过后、交付业务测试/上线前的内部全审计 |
 | `formal-verification-halmos` | 人工指定核心数学模块里的边界反例（AMM 曲线/清算/份额舍入等） | Halmos 有界符号执行 | 核心数学模块新增或改动后、上线前，需要数学级别保证时手动触发 |
@@ -26,9 +27,10 @@
 /plugin update smart-contract-audit-toolkit@smart-contract-audit-toolkit
 ```
 
-安装完成后三个工作流可用（按命名空间 `插件名:workflow名` 调用）：
+安装完成后四个工作流可用（按命名空间 `插件名:workflow名` 调用）：
 
 ```
+/smart-contract-audit-toolkit:generate-invariants-template
 /smart-contract-audit-toolkit:smart-contract-audit-pipeline
 /smart-contract-audit-toolkit:invariant-fuzz-campaign
 /smart-contract-audit-toolkit:formal-verification-halmos
@@ -38,12 +40,13 @@
 
 ## 前置依赖
 
-三个工作流依赖的外部工具均为可选，脚本会在运行时实地检测。装不上工具不影响流程执行，但会在报告里如实说明工具不可用及原因，绝不会编造扫描/测试/证明结果。
+四个工作流中，`generate-invariants-template` 无需外部工具，其他工作流依赖的外部工具均为可选，脚本会在运行时实地检测。装不上工具不影响流程执行，但会在报告里如实说明工具不可用及原因，绝不会编造扫描/测试/证明结果。
 
 ### 工具清单与用途
 
 | 工具 | 用途 | 适用 Workflow | 安装方式 | 装不上时的行为 |
 |------|------|--------------|--------|----------------|
+| （无） | 代码分析与不变量识别 | `generate-invariants-template` | 仅需 Hardhat | N/A |
 | **slither** | Solidity 静态分析工具，检测常见漏洞模式 | `smart-contract-audit-pipeline` (L1 阶段) | `pip install slither-analyzer` | 如实记一条 `severity=Info` 说明工具不可用及原因，不编造扫描结果 |
 | **aderyn** | Rust 编写的高性能静态分析工具（slither 的替代品） | `smart-contract-audit-pipeline` (L1 阶段) | `cargo install aderyn` | 如实记一条 `severity=Info` 说明工具不可用及原因，不编造扫描结果 |
 | **echidna** | 以太坊智能合约模糊测试工具，用于不变量检验 | `invariant-fuzz-campaign` | `pip install echidna` | 返回 `available=false, status=ToolUnavailable` 并说明原因，不伪造 fuzz 结果 |
@@ -52,9 +55,12 @@
 
 ### 快速安装
 
-如果想完整体验三个工作流，可根据需要安装对应工具组：
+如果想完整体验四个工作流，可根据需要安装对应工具组：
 
 ```bash
+# 选项 0: 生成不变量清单（无需工具）
+# generate-invariants-template 无需任何外部工具
+
 # 选项 1: L1 静态扫描（选一个）
 pip install slither-analyzer          # 或
 cargo install aderyn
@@ -69,6 +75,7 @@ pip install halmos
 
 ### 最小化场景
 
+- ✅ **只想生成不变量清单** → `generate-invariants-template`（无需装任何工具）
 - ✅ **只想看 L2 语义审计** → 无需装任何工具，L2 是纯 LLM 分析
 - ✅ **想跑完整 L1-L4 审计** → 至少装一个静态扫描工具（slither 或 aderyn）
 - ✅ **想做不变量 fuzz** → 装 echidna 或 medusa（或都装）
@@ -77,6 +84,12 @@ pip install halmos
 ## 用法示例
 
 ```
+/smart-contract-audit-toolkit:generate-invariants-template
+（自动发现本仓库核心合约，识别不变量，生成 .audit/invariants.md）
+
+/smart-contract-audit-toolkit:generate-invariants-template contracts/Token.sol,contracts/Vault.sol
+（仅对指定合约生成不变量清单）
+
 /smart-contract-audit-toolkit:smart-contract-audit-pipeline
 （自动发现本仓库核心合约，跑全套 L1~L4）
 
@@ -135,13 +148,13 @@ pip install halmos
 
 ## `.audit/` 目录约定
 
-三个工作流共享的持久化状态目录，`smart-contract-audit-pipeline` 的 L1 阶段会在目录不存在时自动建骨架，插件本身不携带模板文件：
+四个工作流共享的持久化状态目录，`smart-contract-audit-pipeline` 的 L1 阶段会在目录不存在时自动建骨架，`generate-invariants-template` 可生成初始模板，插件本身不携带预填充的模板文件：
 
-- `.audit/invariants.md` —— 不变量清单
+- `.audit/invariants.md` —— 不变量清单（由 `generate-invariants-template` 初始生成，之后人工维护）
 - `.audit/false-positives.md` —— 已确认误报库
 - `.audit/exemptions.md` —— 书面豁免记录
 - `.audit/regression/` —— PoC/反例回归测试永久保留目录
-- `.audit/reports/` —— L1 扫描原始报告与三个工作流各自的 `-latest.md` 汇总报告
+- `.audit/reports/` —— L1 扫描原始报告与各工作流的 `-latest.md` 汇总报告
 - `.audit/reports/audit-latest.md` —— `smart-contract-audit-pipeline` 本轮 L1–L4 的整体汇总、门禁、PoC、人工复核项和可选元信息；每次运行覆盖更新
 - `.audit/reports/invariant-fuzz-latest.md` —— `invariant-fuzz-campaign` 本轮不变量模糊测试结果（Falsified/PassedThisRound/Skipped）；每次运行覆盖更新
 - `.audit/reports/halmos-verification-latest.md` —— `formal-verification-halmos` 本轮 Halmos 有界证明结果（Proved/Counterexample/Inconclusive）；每次运行覆盖更新
