@@ -4,8 +4,8 @@
 
 | Workflow | 找什么 | 证明方式 | 什么时候用 |
 |---|---|---|---|
-| `smart-contract-audit-pipeline` | 语义类漏洞：重入、权限、精度、预言机、业务逻辑偏差等 10 大专项 | L1 静态扫描 + L2 四角色对抗（🔵审计员/🔴攻击者/🟢修复工程师/⚖️裁判）+ L3 PoC 复现 | 默认入口，合约开发自测通过后、交付业务测试/上线前的内部全审计 |
 | `invariant-fuzz-campaign` | 组合型漏洞：多笔调用序列才会触发的状态不一致 | Echidna + Medusa 无边界随机模糊测试 | 核心状态机相关合约较大改动后，或按周（建议）跑一次深度 fuzz |
+| `smart-contract-audit-pipeline` | 语义类漏洞：重入、权限、精度、预言机、业务逻辑偏差等 10 大专项 | L1 静态扫描 + L2 四角色对抗（🔵审计员/🔴攻击者/🟢修复工程师/⚖️裁判）+ L3 PoC 复现 | 默认入口，合约开发自测通过后、交付业务测试/上线前的内部全审计 |
 | `formal-verification-halmos` | 人工指定核心数学模块里的边界反例（AMM 曲线/清算/份额舍入等） | Halmos 有界符号执行 | 核心数学模块新增或改动后、上线前，需要数学级别保证时手动触发 |
 
 ## 安装
@@ -38,13 +38,41 @@
 
 ## 前置依赖
 
-三个工作流依赖的外部工具均为可选，脚本会在运行时实地检测：
+三个工作流依赖的外部工具均为可选，脚本会在运行时实地检测。装不上工具不影响流程执行，但会在报告里如实说明工具不可用及原因，绝不会编造扫描/测试/证明结果。
 
-| 工具 | 用于哪个 workflow | 装不上时的行为 |
-|---|---|---|
-| slither / aderyn | `smart-contract-audit-pipeline`（L1） | 如实记一条 `severity=Info` 说明工具不可用及原因，不编造扫描结果 |
-| echidna / medusa | `invariant-fuzz-campaign` | 返回 `available=false, status=ToolUnavailable` 并说明原因，不伪造 fuzz 结果 |
-| halmos | `formal-verification-halmos` | 返回 `result=ToolUnavailable`，不伪造证明结果 |
+### 工具清单与用途
+
+| 工具 | 用途 | 适用 Workflow | 安装方式 | 装不上时的行为 |
+|------|------|--------------|--------|----------------|
+| **slither** | Solidity 静态分析工具，检测常见漏洞模式 | `smart-contract-audit-pipeline` (L1 阶段) | `pip install slither-analyzer` | 如实记一条 `severity=Info` 说明工具不可用及原因，不编造扫描结果 |
+| **aderyn** | Rust 编写的高性能静态分析工具（slither 的替代品） | `smart-contract-audit-pipeline` (L1 阶段) | `cargo install aderyn` | 如实记一条 `severity=Info` 说明工具不可用及原因，不编造扫描结果 |
+| **echidna** | 以太坊智能合约模糊测试工具，用于不变量检验 | `invariant-fuzz-campaign` | `pip install echidna` | 返回 `available=false, status=ToolUnavailable` 并说明原因，不伪造 fuzz 结果 |
+| **medusa** | Go 编写的高性能合约模糊测试工具（echidna 的补充） | `invariant-fuzz-campaign` | `cargo install medusa` | 返回 `available=false, status=ToolUnavailable` 并说明原因，不伪造 fuzz 结果 |
+| **halmos** | 以太坊智能合约符号执行验证工具，用于形式化验证 | `formal-verification-halmos` | `pip install halmos` | 返回 `result=ToolUnavailable`，不伪造证明结果 |
+
+### 快速安装
+
+如果想完整体验三个工作流，可根据需要安装对应工具组：
+
+```bash
+# 选项 1: L1 静态扫描（选一个）
+pip install slither-analyzer          # 或
+cargo install aderyn
+
+# 选项 2: 不变量模糊测试（建议都装）
+pip install echidna
+cargo install medusa
+
+# 选项 3: 形式化验证
+pip install halmos
+```
+
+### 最小化场景
+
+- ✅ **只想看 L2 语义审计** → 无需装任何工具，L2 是纯 LLM 分析
+- ✅ **想跑完整 L1-L4 审计** → 至少装一个静态扫描工具（slither 或 aderyn）
+- ✅ **想做不变量 fuzz** → 装 echidna 或 medusa（或都装）
+- ✅ **想做形式化验证** → 装 halmos
 
 ## 用法示例
 
