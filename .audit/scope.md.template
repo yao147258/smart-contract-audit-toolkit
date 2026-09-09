@@ -1,0 +1,122 @@
+<!--
+本文件是 .audit/scope.md 的示例模板，展示 generate-scope-template workflow 的产出形态与填写方式。
+实际使用时请运行 /smart-contract-audit-toolkit:generate-scope-template 基于你自己的合约生成，
+不要直接复制本文件的内容——里面的假设、参数、路径都是虚构的示例。
+-->
+
+# 审计范围与信任假设
+
+> 本文件由 `generate-scope-template` workflow 生成，是 `smart-contract-audit-pipeline` 的**硬前置**。
+>
+> **放行规则（不可协商）**：
+> 1. 第 3 章「信任假设」的状态列只有两个合法值：`⬜ 待人工确认` / `✅ 已确认`，人工逐条核对后手动改成后者即为签字；
+> 2. 文末「人工签字」栏的确认人与确认日期必须填写，留空视为未完成；
+> 3. 只要还有一条未确认、或签字栏为空，pipeline 会在准备阶段直接早退，**没有参数可以绕过**；
+> 4. 标记 `✅ 已确认` 的含义是：你本人核对过该假设在当前部署环境下成立，并对此负责。AI 不代签。
+
+## 1. 系统概述与核心资产
+
+单池借贷协议：用户存入 USDC 获得 vUSDC 份额并赚取利息，可按抵押率借出 ETH；健康度低于 1 时头寸可被任何人清算。
+
+### 核心资产
+
+| 资产 | 类型 | 存放位置 | 说明 |
+|---|---|---|---|
+| USDC | ERC20 | Vault.sol 合约余额 | 用户存入的本金，按份额比例可赎回 |
+| ETH | 原生 ETH | Vault.sol 合约余额 | 可借出的资产，借款需超额抵押 |
+| vUSDC 份额 | 份额代币 | 用户钱包 | 代表对池子的权益，赎回时按 totalAssets/totalSupply 折算 |
+| 协议参数修改权 | 权限 | Vault.sol 的 owner | 可调整费率与暂停开关，直接影响用户资金 |
+
+## 2. 角色与权限矩阵
+
+### 角色
+
+| 角色 | 持有者 | 说明 |
+|---|---|---|
+| owner | 需人工确认（代码中为单一 address，是否为多签需看部署脚本） | 协议管理员，可改费率与暂停 |
+| 任意用户 | EOA 或合约 | 存款、取款、借款、还款 |
+| 清算人 | 任意地址，无准入 | 对健康度不足的头寸发起清算并获得奖励 |
+
+### 权限矩阵
+
+| 角色 | 合约 | 可调用的特权函数 | 备注 |
+|---|---|---|---|
+| owner | contracts/Vault.sol | `setFeeBps`、`setOracle`、`pause`、`unpause` | 无时锁；setOracle 可直接改喂价源，影响全部头寸估值 |
+| 任意用户 | contracts/Vault.sol | `deposit`、`withdraw`、`borrow`、`repay` | pause 时全部禁用 |
+| 清算人 | contracts/Vault.sol | `liquidate` | 仅在 healthFactor < 1e18 时可调用 |
+
+## 3. 信任假设
+
+> 依据列说明：`代码推断` = 可从合约代码直接读出；`需人工判断` = 代码里读不出来，取决于部署与治理的真实情况。
+> 两类都需要人工签字，前者只是核对成本更低。
+
+| 主体 | 假设 | 依据 | 状态 |
+|---|---|---|---|
+| owner | 假定不作恶，且不会把 oracle 换成受控合约抽干资金池 | 需人工判断 | ⬜ 待人工确认 |
+| owner 私钥 | 假定由 3/5 多签持有，成员互相独立、非同一人的多个钱包 | 需人工判断 | ⬜ 待人工确认 |
+| Chainlink ETH/USD 预言机 | 假定喂价及时且准确，不会长时间停更 | 需人工判断 | ⬜ 待人工确认 |
+| USDC 代币合约 | 标准 ERC20 实现，无 fee-on-transfer、无 rebasing、transfer 有返回值 | 代码推断 | ⬜ 待人工确认 |
+| 清算激励 | 假定清算奖励足以覆盖 gas，极端行情下仍有人愿意清算 | 需人工判断 | ⬜ 待人工确认 |
+
+## 4. 经济模型与资金流
+
+### 资金流入与流出
+
+| 方向 | 入口 | 合约 | 说明 |
+|---|---|---|---|
+| 流入 | deposit(uint256 assets) | contracts/Vault.sol | 用户存入 USDC，按当前汇率铸造 vUSDC |
+| 流入 | repay(uint256 amount) | contracts/Vault.sol | 借款人偿还 ETH 本息 |
+| 流出 | withdraw(uint256 shares) | contracts/Vault.sol | 销毁份额换回 USDC，扣除 feeBps |
+| 流出 | borrow(uint256 amount) | contracts/Vault.sol | 按抵押率借出 ETH |
+| 流出 | liquidate(address user) | contracts/Vault.sol | 清算人代偿债务并折价拿走抵押品 |
+
+### 关键参数
+
+| 参数 | 当前值 | 可修改者 | 说明 |
+|---|---|---|---|
+| feeBps | 50 | owner | 提取手续费，上限未在代码中约束 |
+| collateralRatio | 150% | owner | 最低抵押率 |
+| liquidationBonus | 5% | owner | 清算人折价买入抵押品的折扣 |
+
+### 机制
+
+- **利息累积**：按区块线性累积，利率来自 RateModel 的利用率曲线
+- **清算**：健康度低于 1 时任何人可代偿最多 50% 债务，并以 liquidationBonus 折扣拿走对应抵押品
+
+### 文档来源
+
+- docs/PRD-借贷协议.md
+- README.md 的「协议参数」章节
+
+### 明确未找到的内容
+
+- 利率曲线的拐点参数为什么取 80% 利用率，未在任何文档中说明
+- liquidationBonus 与 collateralRatio 的组合是否会在极端行情下导致坏账，未见测算文档
+
+## 5. 审计边界
+
+### 纳入审计（in scope）
+
+- `contracts/Vault.sol`
+- `contracts/libraries/MathLib.sol`
+- `contracts/RateModel.sol`
+
+### 排除在外（out of scope）
+
+| 路径 | 排除原因 |
+|---|---|
+| contracts/mocks/ | 测试替身，不上线 |
+| contracts/interfaces/ | 纯接口无实现 |
+| contracts/vendor/openzeppelin/ | 第三方 vendored 代码，只审我们如何调用它，不审其源码 |
+
+## 人工签字
+
+| 项目 | 值 |
+|---|---|
+| 确认人 | （待填写） |
+| 确认日期 | （待填写） |
+| 确认范围 | 本文件第 3 章的全部信任假设 |
+
+---
+
+本文件由 AI 生成初稿，全部信任假设的最终判定必须由人签字，AI 不代签。

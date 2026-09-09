@@ -70,6 +70,45 @@ function markdownCell(value) {
   return String(value).replaceAll('|', '\\|').replace(/[\r\n]+/g, '<br>')
 }
 
+// 审计范围文档的唯一权威路径。这个值必须与 workflows/generate-scope-template.js 里的
+// SCOPE_PATH 保持一致，改动时两处必须同步，否则本流水线会因为找不到文件而永久早退。
+export const SCOPE_PATH = '.audit/scope.md'
+
+// 范围文档门禁：纯函数，不调大模型，避免让 AI 给自己的前置条件打分。
+// 三条硬性条件（任一不满足即早退，且没有参数可以绕过）：
+//   ① .audit/scope.md 存在；
+//   ② 第 3 章信任假设没有剩余的「⬜ 待人工确认」；
+//   ③ 文末签字栏的确认人与确认日期都已填写。
+// fail-closed：上下文 agent 返回空值/结构异常时一律判为不通过——
+// "读不出来"和"确认过了"绝不能等价，否则这道前置形同虚设。
+export function evaluateScopeGate(context) {
+  const source = context || {}
+
+  if (source.scopeExists !== true) {
+    return {
+      pass: false,
+      reason: `${SCOPE_PATH} 不存在或未能读取。请先运行 /smart-contract-audit-toolkit:generate-scope-template 生成审计范围文档，人工确认信任假设并签字后再跑本流水线。`,
+    }
+  }
+
+  const blockers = []
+  const unconfirmed = Array.isArray(source.unconfirmedAssumptions) ? source.unconfirmedAssumptions.filter(Boolean) : []
+  if (unconfirmed.length) {
+    blockers.push(
+      `${SCOPE_PATH} 中仍有 ${unconfirmed.length} 条信任假设为「⬜ 待人工确认」，请逐条核对后改成「✅ 已确认」：`,
+      ...unconfirmed.map(item => `  - ${item}`)
+    )
+  }
+
+  const confirmedBy = typeof source.scopeConfirmedBy === 'string' ? source.scopeConfirmedBy.trim() : ''
+  const confirmedAt = typeof source.scopeConfirmedAt === 'string' ? source.scopeConfirmedAt.trim() : ''
+  if (!confirmedBy) blockers.push(`${SCOPE_PATH} 文末签字栏的「确认人」为空，未完成人工签字`)
+  if (!confirmedAt) blockers.push(`${SCOPE_PATH} 文末签字栏的「确认日期」为空，未完成人工签字`)
+
+  if (blockers.length) return { pass: false, reason: blockers.join('\n') }
+  return { pass: true, reason: '' }
+}
+
 function listValue(values) {
   return Array.isArray(values) && values.length ? values : ['无']
 }
@@ -86,6 +125,7 @@ export function buildAuditSummaryMarkdown(input = {}) {
   // .filter(Boolean)：与 l1.findings 同理，上游虽已过滤一次，这里再兜一层，成本几乎为零
   const perTarget = Array.isArray(input.perTarget) ? input.perTarget.filter(Boolean) : []
   const global = input.global || {}
+  const scope = input.scope || {}
   const lines = [
     '# 智能合约审计总报告',
     '',
@@ -100,6 +140,7 @@ export function buildAuditSummaryMarkdown(input = {}) {
     `| 审查模型 | ${markdownCell(metadata.model)} |`,
     `| 审查人 | ${markdownCell(metadata.reviewer)} |`,
     `| 审计范围 | ${targets.length ? targets.map(target => '`' + markdownCell(target) + '`').join('、') : '无'} |`,
+    `| 审计范围文档 | \`${SCOPE_PATH}\`（确认人：${markdownCell(scope.confirmedBy)}，确认日期：${markdownCell(scope.confirmedAt)}） |`,
     `| L2 专项 | ${categories.length ? categories.map(category => {
       const key = typeof category === 'string' ? category : category.key
       const label = typeof category === 'string' ? category : category.label
@@ -414,16 +455,41 @@ const GLOBAL_SCHEMA = {
 // ---------------------------------------------------------------------------
 // 提示词构造函数
 // ---------------------------------------------------------------------------
+const CONTEXT_SCHEMA = {
+  type: 'object',
+  properties: {
+    scopeExists: { type: 'boolean', description: `${SCOPE_PATH} 是否真实存在且可读。没实地读到就填 false，禁止推测` },
+    unconfirmedAssumptions: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '第 3 章信任假设表中状态列仍为「⬜ 待人工确认」的条目，每条格式为"主体：假设"。全部已确认时返回空数组',
+    },
+    scopeConfirmedBy: { type: 'string', description: '文末签字栏「确认人」的原文。空白、"（待填写）"或类似占位一律返回空字符串' },
+    scopeConfirmedAt: { type: 'string', description: '文末签字栏「确认日期」的原文。空白、"（待填写）"或类似占位一律返回空字符串' },
+    scopeSummary: { type: 'string', description: '范围文档要点摘要（核心资产、角色权限、已确认的信任假设、审计边界），供 L2 审计员与裁判角色判断"什么是被允许的行为"' },
+    summary: { type: 'string', description: '完整审计上下文摘要（五段，不超过 1200 字）' },
+  },
+  required: ['scopeExists', 'unconfirmedAssumptions', 'scopeConfirmedBy', 'scopeConfirmedAt', 'summary'],
+}
+
 function contextPrompt() {
   return `读取本仓库以下文件作为本轮审计的上下文（不存在的如实说明"文件不存在"，不要编造内容）：
+- ${SCOPE_PATH}（审计范围与信任假设文档，**本轮审计的硬前置**，优先读它）
 - .audit/invariants.md（L0 不变量清单）
 - .audit/false-positives.md（已确认误报库，用于降噪，抑制重复报告）
 - .audit/exemptions.md（已知问题书面豁免）
-- 在 docs/ 目录或仓库根目录下查找 PRD/需求/技术设计类文档（常见命名如 *PRD*、*需求*、*设计*，或 README 中的架构章节），重点看与合约资金流转/利率/清算/额度相关的章节；找不到明确对应文件就如实说明，不要编造
+- 若 ${SCOPE_PATH} 的第 4 章已写明经济模型与资金流，直接采信，不必再翻文档；仅当该章为空或标注"待人工补充"时，才去 docs/ 或仓库根目录找 PRD/需求/设计类文档补充
 
-把以上内容浓缩为不超过 800 字的审计上下文摘要，分四段：
-①已知不变量要点  ②已确认误报要点（供后续各专项审计跳过）  ③已豁免问题要点  ④经济模型/资金流转要点（若无相关文档，如实说明未找到）。
-直接输出摘要文本，不要输出 JSON。`
+关于 ${SCOPE_PATH} 的四个结构化字段，必须实地读取原文后如实填写，禁止推测或补全：
+1. scopeExists：文件真实存在且读到内容才填 true；文件不存在、读取失败、内容为空一律 false；
+2. unconfirmedAssumptions：逐行检查第 3 章「信任假设」表格的状态列，凡是仍为「⬜ 待人工确认」的，按"主体：假设"格式收集进数组。全部为「✅ 已确认」时返回空数组。**不要替人判断某条假设"显然成立"而擅自跳过**；
+3. scopeConfirmedBy / scopeConfirmedAt：读文末「人工签字」表格。仍是"（待填写）"、空白或任何占位符时返回空字符串，不要用文档里其他地方出现的人名或日期顶替；
+4. scopeSummary：把范围文档浓缩成要点（核心资产、角色权限矩阵、已确认的信任假设、审计边界），后续 L2 的审计员与裁判角色靠它判断"哪些行为是设计允许的、哪些才是漏洞"。
+
+summary 字段填不超过 1200 字的审计上下文摘要，分五段：
+①审计范围与信任假设要点  ②已知不变量要点  ③已确认误报要点（供后续各专项审计跳过）  ④已豁免问题要点  ⑤经济模型/资金流转要点。
+若 ${SCOPE_PATH} 不存在，summary 里如实说明，其余字段按上述规则填空值。
+严格按 schema 返回 JSON。`
 }
 
 function discoveryPrompt() {
@@ -501,12 +567,16 @@ ${JSON.stringify(attackerOut)}
 严格按 schema 返回 JSON（保留已有字段，新增 patches）。`
 }
 
-function judgePrompt(cat, target, fixerOut) {
+function judgePrompt(cat, target, fixerOut, scopeSummary) {
   return `L2 语义审计 —— 角色④⚖️裁判（默认每一条发现都是错的，除非代码逐行证明成立）。
 汇总前三个角色的产出：
 ${JSON.stringify(fixerOut)}
 
+审计范围与信任假设（来自 ${SCOPE_PATH}，已经过人工签字确认，视为本轮审计的事实前提）：
+${scopeSummary || '未提供'}
+
 裁判规则（不可协商）：
+0. 先用上面的信任假设过滤：如果一条发现的攻击前提正是某条**已签字确认**的信任假设（典型如"owner 可以调用 setFee 抽走手续费"，而范围文档已确认 owner 是可信多签），把它移入 rejectedFindings，拒绝理由写明命中了哪一条信任假设。反之，如果攻击路径**不依赖**任何被信任的主体（任意外部账户即可发起），信任假设不构成拒绝理由，继续按下面的规则走查。注意：范围文档说"信任 owner"只覆盖 owner 的合法操作，不覆盖"任意人都能冒充 owner"这类权限校验缺陷；
 1. 逐条重新走查源码，验证 attackPath 是否真的成立；
 2. 能用代码逐行证明成立 → status=Confirmed；
 3. 攻击路径合理但需要运行时状态才能确证（如需要 fuzz/PoC）→ status=NeedsPoC，**不得**标记 Confirmed；
@@ -587,12 +657,16 @@ function computeGates(l1, confirmedFindings, pocResults) {
 // L2 单目标：四角色对抗 × 多专项类别（专项之间用 pipeline，无阻塞并行推进）
 // ---------------------------------------------------------------------------
 async function l2Stage(target, l1, context, categories) {
+  // context 是 CONTEXT_SCHEMA 结构：审计员吃完整五段摘要，裁判额外吃范围文档要点——
+  // "管理员能抽走手续费"算不算漏洞，完全取决于信任假设，裁判才是做这个取舍的角色。
+  const contextSummary = (context && context.summary) || ''
+  const scopeSummary = (context && (context.scopeSummary || context.summary)) || ''
   const categoryResults = await pipeline(
     categories,
-    cat => agent(auditorPrompt(cat, target, l1, context), { phase: 'L2 语义审计', schema: AUDITOR_SCHEMA, label: `L2-审计员:${target}:${cat.key}` }),
+    cat => agent(auditorPrompt(cat, target, l1, contextSummary), { phase: 'L2 语义审计', schema: AUDITOR_SCHEMA, label: `L2-审计员:${target}:${cat.key}` }),
     (auditorOut, cat) => agent(attackerPrompt(cat, target, auditorOut), { phase: 'L2 语义审计', schema: ATTACKER_SCHEMA, label: `L2-攻击者:${target}:${cat.key}`, effort: 'high' }),
     (attackerOut, cat) => agent(fixerPrompt(cat, target, attackerOut), { phase: 'L2 语义审计', schema: FIXER_SCHEMA, label: `L2-修复工程师:${target}:${cat.key}` }),
-    (fixerOut, cat) => agent(judgePrompt(cat, target, fixerOut), { phase: 'L2 语义审计', schema: JUDGE_SCHEMA, label: `L2-裁判:${target}:${cat.key}`, effort: 'high' })
+    (fixerOut, cat) => agent(judgePrompt(cat, target, fixerOut, scopeSummary), { phase: 'L2 语义审计', schema: JUDGE_SCHEMA, label: `L2-裁判:${target}:${cat.key}`, effort: 'high' })
   )
   const valid = categoryResults.filter(Boolean)
   const dropped = categories.length - valid.length
@@ -638,7 +712,18 @@ async function l4Stage(l3Out, target) {
 // 主流程
 // ===========================================================================
 phase('准备')
-const context = await agent(contextPrompt(), { label: '加载审计上下文' })
+const context = await agent(contextPrompt(), { schema: CONTEXT_SCHEMA, label: '加载审计上下文' })
+
+// 范围文档门禁：硬前置，没有参数可以绕过。
+// 理由：L2 语义审计判断"代码行为 ≠ 业务意图"的能力，完全取决于它知不知道业务意图是什么。
+// 没有经人工签字的信任假设，AI 只能报模式化漏洞，还会把设计允许的管理员操作误报成漏洞。
+const scopeGate = evaluateScopeGate(context)
+if (!scopeGate.pass) {
+  log('⛔ 审计范围文档未就绪，本轮审计不启动：')
+  log(scopeGate.reason)
+  return { error: '审计范围文档未就绪', scopeGate }
+}
+log(`✅ 审计范围文档已就绪（确认人：${context.scopeConfirmedBy}，确认日期：${context.scopeConfirmedAt}）`)
 
 let targets = args && args.targets && args.targets.length ? args.targets : null
 if (!targets) {
@@ -697,6 +782,7 @@ try {
     targets,
     categories,
     skipL3,
+    scope: { confirmedBy: context.scopeConfirmedBy, confirmedAt: context.scopeConfirmedAt },
     l1,
     perTarget: valid,
     global: globalReport,

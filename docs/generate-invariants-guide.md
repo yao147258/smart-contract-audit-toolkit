@@ -2,7 +2,7 @@
 
 ## 概述
 
-`generate-invariants-template` 是 smart-contract-audit-toolkit 的第一个工作流，专门用于**项目初期识别和生成系统核心不变量清单**。
+`generate-invariants-template` 是 smart-contract-audit-toolkit 的准备类工作流之一（另一个是 `generate-scope-template`），专门用于**项目初期识别和生成系统核心不变量清单**。
 
 在使用 `invariant-fuzz-campaign` 进行长程模糊测试前，你需要先定义"什么是系统应该始终成立的性质"。本工作流帮你自动发现合约、分析代码结构、并推荐候选不变量。
 
@@ -235,6 +235,6 @@
 
 ## 更多资源
 
-- 📖 详细工作流说明：见 `docs/workflow-details.md` 第 0 节
+- 📖 详细工作流说明：见 `docs/workflow-details.md` 第 1 节
 - 📋 不变量清单模板：见 `.audit/invariants.md.template`
 - 🧪 后续 Fuzz 运行：见 README.md 的 `invariant-fuzz-campaign` 部分
