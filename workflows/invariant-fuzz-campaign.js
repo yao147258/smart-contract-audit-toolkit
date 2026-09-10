@@ -282,7 +282,7 @@ ${JSON.stringify(results.map(r => ({ id: r.invariant.id, overallStatus: r.report
 // ---------------------------------------------------------------------------
 async function fuzzStage(harnessOut, inv, engines, rounds, minutesPerRound) {
   if (!harnessOut || !harnessOut.ready) {
-    log(`⚠️ ${inv.id}：装置未就绪（${(harnessOut && harnessOut.blockedReason) || '未知原因'}），跳过本轮 fuzz`)
+    log(`⚠ ${inv.id}：装置未就绪（${(harnessOut && harnessOut.blockedReason) || '未知原因'}），跳过本轮 fuzz`)
     return { invariant: inv, harness: harnessOut, engineResults: [] }
   }
   const engineResults = await parallel(
@@ -350,7 +350,7 @@ const results = await pipeline(
 
 const valid = results.filter(Boolean)
 const dropped = invariants.length - valid.length
-if (dropped > 0) log(`⚠️ ${dropped}/${invariants.length} 条不变量在流水线某阶段失败，已跳过，未计入最终报告`)
+if (dropped > 0) log(`⚠ ${dropped}/${invariants.length} 条不变量在流水线某阶段失败，已跳过，未计入最终报告`)
 
 const globalReport = await agent(globalPrompt(valid), { phase: '结果归档', schema: GLOBAL_SCHEMA, label: '总报告' })
 log(`fuzz campaign 完成：${valid.length}/${invariants.length} 条走完全流程，Falsified ${globalReport.falsifiedCount || 0} 条`)
@@ -390,7 +390,7 @@ try {
   archive = { status: 'Failed', path: ARCHIVE_PATH, error: `报告生成或归档异常：${(err && err.message) || String(err)}` }
 }
 if (!archive || archive.status !== 'Written') {
-  log(`⚠️ fuzz campaign 报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
+  log(`⚠ fuzz campaign 报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
 }
 
 return {

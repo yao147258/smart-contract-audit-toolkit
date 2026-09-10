@@ -258,12 +258,12 @@ ${JSON.stringify(moduleResults.map(r => ({ file: r.file, report: r.report })))}
 // ---------------------------------------------------------------------------
 async function proveStage(spec, mod, loopBound) {
   if (!spec || !spec.ready) {
-    log(`⚠️ ${mod.file}：证明装置未就绪（${(spec && spec.blockedReason) || '未知原因'}），跳过`)
+    log(`⚠ ${mod.file}：证明装置未就绪（${(spec && spec.blockedReason) || '未知原因'}），跳过`)
     return { file: mod.file, spec, proofs: [] }
   }
   const properties = spec.properties || []
   if (!properties.length) {
-    log(`⚠️ ${mod.file}：装置未产出任何可证明的性质，跳过`)
+    log(`⚠ ${mod.file}：装置未产出任何可证明的性质，跳过`)
     return { file: mod.file, spec, proofs: [] }
   }
   // 同一模块的多条性质需要汇总进同一份模块报告，属于合理屏障
@@ -312,7 +312,7 @@ const results = await pipeline(
 
 const valid = results.filter(Boolean)
 const dropped = modules.length - valid.length
-if (dropped > 0) log(`⚠️ ${dropped}/${modules.length} 个模块在流水线某阶段失败，已跳过，未计入最终报告`)
+if (dropped > 0) log(`⚠ ${dropped}/${modules.length} 个模块在流水线某阶段失败，已跳过，未计入最终报告`)
 
 phase('结果汇总')
 const globalReport = await agent(globalPrompt(valid), { phase: '结果汇总', schema: GLOBAL_SCHEMA, label: '总报告' })
@@ -353,7 +353,7 @@ try {
   archive = { status: 'Failed', path: ARCHIVE_PATH, error: `报告生成或归档异常：${(err && err.message) || String(err)}` }
 }
 if (!archive || archive.status !== 'Written') {
-  log(`⚠️ Halmos 验证报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
+  log(`⚠ Halmos 验证报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
 }
 
 return {

@@ -494,10 +494,10 @@ try {
 }
 
 if (archive.status !== 'Written') {
-  log(`⚠️ 审计范围文档写入失败：${archive.error || '归档 agent 未返回成功状态'}`)
+  log(`⚠ 审计范围文档写入失败：${archive.error || '归档 agent 未返回成功状态'}`)
 } else {
   log(`✅ 审计范围文档已生成：${SCOPE_PATH}（${assumptionCount} 条信任假设，全部为待人工确认）`)
-  log(`⚠️ 下一步必须人工完成，pipeline 才会放行：逐条把状态改成「${CONFIRMED_MARK}」，并填写文末签字栏的确认人与确认日期。`)
+  log(`⚠ 下一步必须人工完成，pipeline 才会放行：逐条把状态改成「${CONFIRMED_MARK}」，并填写文末签字栏的确认人与确认日期。`)
 }
 
 return {

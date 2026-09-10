@@ -568,7 +568,7 @@ ${JSON.stringify(attackerOut)}
 }
 
 function judgePrompt(cat, target, fixerOut, scopeSummary) {
-  return `L2 语义审计 —— 角色④⚖️裁判（默认每一条发现都是错的，除非代码逐行证明成立）。
+  return `L2 语义审计 —— 角色④⚖裁判（默认每一条发现都是错的，除非代码逐行证明成立）。
 汇总前三个角色的产出：
 ${JSON.stringify(fixerOut)}
 
@@ -670,7 +670,7 @@ async function l2Stage(target, l1, context, categories) {
   )
   const valid = categoryResults.filter(Boolean)
   const dropped = categories.length - valid.length
-  if (dropped > 0) log(`⚠️ ${target}：有 ${dropped}/${categories.length} 个 L2 专项类别在某一角色环节失败，已跳过（未静默计入"已通过"）`)
+  if (dropped > 0) log(`⚠ ${target}：有 ${dropped}/${categories.length} 个 L2 专项类别在某一角色环节失败，已跳过（未静默计入"已通过"）`)
   const confirmedFindings = valid.flatMap(r => r.confirmedFindings || [])
   return { target, l1, categories: valid, confirmedFindings }
 }
@@ -685,7 +685,7 @@ async function l3Stage(l2Out, target, skipL3) {
     f => (f.status === 'Confirmed' || f.status === 'NeedsPoC') && (f.severity === 'Critical' || f.severity === 'High')
   )
   if (skipL3) {
-    if (needsEvidence.length > 0) log(`⚠️ ${target}：skipL3=true，跳过 ${needsEvidence.length} 条 Critical/High 的 PoC 验证，门禁将标记为未通过`)
+    if (needsEvidence.length > 0) log(`⚠ ${target}：skipL3=true，跳过 ${needsEvidence.length} 条 Critical/High 的 PoC 验证，门禁将标记为未通过`)
     return { ...l2Out, pocResults: [] }
   }
   if (!needsEvidence.length) {
@@ -766,7 +766,7 @@ const perTarget = await pipeline(
 
 const valid = perTarget.filter(Boolean)
 const droppedTargets = targets.length - valid.length
-if (droppedTargets > 0) log(`⚠️ ${droppedTargets}/${targets.length} 个目标合约在流水线某阶段失败，已跳过，未计入最终报告`)
+if (droppedTargets > 0) log(`⚠ ${droppedTargets}/${targets.length} 个目标合约在流水线某阶段失败，已跳过，未计入最终报告`)
 
 const globalReport = await agent(globalSynthesisPrompt(valid, l1), { schema: GLOBAL_SCHEMA, label: 'L4-总报告' })
 
@@ -813,7 +813,7 @@ try {
   archive = { status: 'Failed', path: ARCHIVE_PATH, error: `报告生成或归档异常：${(err && err.message) || String(err)}` }
 }
 if (!archive || archive.status !== 'Written') {
-  log(`⚠️ 审计总报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
+  log(`⚠ 审计总报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
 }
 
 return {
