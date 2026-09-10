@@ -35,7 +35,7 @@
 目标仓库需是 Hardhat 项目（`contracts/`、`test/` 目录结构）。在该仓库的 Claude Code 会话里执行：
 
 ```
-/plugin marketplace add <你的GitHub账号>/smart-contract-audit-toolkit
+/plugin marketplace add yao147258/smart-contract-audit-toolkit
 /plugin install smart-contract-audit-toolkit@smart-contract-audit-toolkit
 ```
 
