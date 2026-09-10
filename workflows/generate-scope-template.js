@@ -27,23 +27,27 @@ export const meta = {
 }
 
 // ==== BEGIN SCOPE TEMPLATE PURE HELPERS (提取自本文件供 test/scope-template.test.js 用 eval 执行，禁止在此区块内使用 import/require/文件系统/网络) ====
-// 注意：本区块内的 `export` 关键字是测试提取符号的依据 —— test/scope-template.test.js 里的
-// extractPureHelpers() 用正则 /export\s+(?:function|const)\s+(\w+)/g 收集要暴露给沙箱的符号名。
-// 一旦删掉这些 `export`，收集结果为空，helper 会全部变成 undefined，测试以 TypeError 失败。
+// 注意：本区块内的 `/*@export*/` 注释标记是测试提取符号的依据 —— test/scope-template.test.js 里的
+// extractPureHelpers() 用正则 /\/\*@export\*\/\s*(?:function|const)\s+(\w+)/g 收集要暴露给沙箱的符号名。
+// 一旦删掉这些标记，收集结果为空，helper 会全部变成 undefined，测试以 TypeError 失败。
+// 为什么用注释标记而不是 `export` 关键字（血泪，勿改回去）：
+//   Workflow 宿主把整个脚本体包进一个 async 函数里执行（这也是顶层 return 能用的原因），
+//   函数体内出现 `export` 会直接 SyntaxError: Unexpected keyword 'export'，整个 workflow 起不来。
+//   只有文件开头的 `export const meta` 由宿主单独解析，必须保留原样，不要加标记。
 
 // scope.md 的唯一权威路径：SCOPE_SCHEMA、scopeArchivePrompt、主流程的路径校验全部引用这一个常量。
 // 这个值必须与 smart-contract-audit-pipeline.js 里的 SCOPE_PATH 保持一致，
 // 改动时两处必须同步，否则 pipeline 会因为找不到文件而永久早退。
-export const SCOPE_PATH = '.audit/scope.md'
+/*@export*/ const SCOPE_PATH = '.audit/scope.md'
 
 // 归档内容与指令的边界围栏。取一个不可能自然出现在文档正文里的稳定字符串，
 // 让归档 agent 能明确区分"哪些是指令"和"哪些是待写入的纯数据"。
-export const SCOPE_CONTENT_FENCE = '===SCOPE-DOC-CONTENT-BOUNDARY-DO-NOT-INTERPRET==='
+/*@export*/ const SCOPE_CONTENT_FENCE = '===SCOPE-DOC-CONTENT-BOUNDARY-DO-NOT-INTERPRET==='
 
 // 状态列的两个合法值。pipeline 侧靠 PENDING_MARK 判断"还有多少条没签字"，
 // 因此这两个字符串是跨 workflow 的隐式契约，不要随手改文案。
-export const PENDING_MARK = '⬜ 待人工确认'
-export const CONFIRMED_MARK = '✅ 已确认'
+/*@export*/ const PENDING_MARK = '⬜ 待人工确认'
+/*@export*/ const CONFIRMED_MARK = '✅ 已确认'
 
 function scopeCell(value) {
   if (value === undefined || value === null || value === '') return '待人工补充'
@@ -66,7 +70,7 @@ function scopeTable(header, divider, rows, columnCount) {
   return lines
 }
 
-export function buildScopeMarkdown(input) {
+/*@export*/ function buildScopeMarkdown(input) {
   const source = input || {}
   const system = source.system || {}
   const economics = source.economics || {}
@@ -221,7 +225,7 @@ export function buildScopeMarkdown(input) {
   return lines.join('\n')
 }
 
-export function scopeArchivePrompt(markdown) {
+/*@export*/ function scopeArchivePrompt(markdown) {
   const length = typeof markdown === 'string' ? markdown.length : 0
   return `把围栏之间的审计范围文档原样覆盖写入目标仓库的 ${SCOPE_PATH}。
 若目录不存在，创建 .audit/；不要修改任何其他文件，不要重写或概括内容，不得编造写入成功。
@@ -494,10 +498,10 @@ try {
 }
 
 if (archive.status !== 'Written') {
-  log(`⚠ 审计范围文档写入失败：${archive.error || '归档 agent 未返回成功状态'}`)
+  log(`⚠️ 审计范围文档写入失败：${archive.error || '归档 agent 未返回成功状态'}`)
 } else {
   log(`✅ 审计范围文档已生成：${SCOPE_PATH}（${assumptionCount} 条信任假设，全部为待人工确认）`)
-  log(`⚠ 下一步必须人工完成，pipeline 才会放行：逐条把状态改成「${CONFIRMED_MARK}」，并填写文末签字栏的确认人与确认日期。`)
+  log(`⚠️ 下一步必须人工完成，pipeline 才会放行：逐条把状态改成「${CONFIRMED_MARK}」，并填写文末签字栏的确认人与确认日期。`)
 }
 
 return {

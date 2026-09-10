@@ -16,10 +16,9 @@ const extractPureHelpers = () => {
   const beginNewline = workflowSource.indexOf('\n', beginIdx)
   let code = workflowSource.substring(beginNewline + 1, endIdx)
 
-  const exportNames = [...code.matchAll(/export\s+(?:function|const)\s+(\w+)/g)].map(m => m[1])
+  const exportNames = [...code.matchAll(/\/\*@export\*\/\s*(?:function|const)\s+(\w+)/g)].map(m => m[1])
   if (code.includes('const REPORT_STAGE_NAMES')) exportNames.unshift('REPORT_STAGE_NAMES')
 
-  code = code.split('\n').map(line => line.replace(/^export\s+/, '')).join('\n')
   code += `\nreturn { ${exportNames.join(', ')} };`
 
   return new Function(`'use strict';\n${code}\n`)()

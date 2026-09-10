@@ -16,9 +16,8 @@ const extractPureHelpers = () => {
   const beginNewline = workflowSource.indexOf('\n', beginIdx)
   let code = workflowSource.substring(beginNewline + 1, endIdx)
 
-  const exportNames = [...code.matchAll(/export\s+(?:function|const)\s+(\w+)/g)].map(m => m[1])
+  const exportNames = [...code.matchAll(/\/\*@export\*\/\s*(?:function|const)\s+(\w+)/g)].map(m => m[1])
 
-  code = code.split('\n').map(line => line.replace(/^export\s+/, '')).join('\n')
   code += `\nreturn { ${exportNames.join(', ')} };`
 
   const wrapper = `'use strict';\n${code}\n`
@@ -147,7 +146,7 @@ test('workflow 静态声明固定四阶段并保留顶层 phase 顺序', () => {
 test('scope.md 路径在生成侧与流水线门禁侧保持一致', () => {
   const pipelinePath = fileURLToPath(new URL('../workflows/smart-contract-audit-pipeline.js', import.meta.url))
   const pipelineSource = readFileSync(pipelinePath, 'utf8')
-  const declared = pipelineSource.match(/export const SCOPE_PATH = '([^']+)'/)
+  const declared = pipelineSource.match(/\/\*@export\*\/ const SCOPE_PATH = '([^']+)'/)
 
   assert.ok(declared, '流水线里必须声明 SCOPE_PATH')
   // 两个 workflow 各自硬编码路径，一旦改一处漏一处，pipeline 会因为找不到文件而永久早退

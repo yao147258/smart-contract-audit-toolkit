@@ -1,0 +1,19 @@
+# 强制所有文本文件在工作区使用 LF 换行。
+#
+# 原因（重要，勿删）：Claude Code 的 Workflow 宿主在校验脚本时，会把 \r（回车符）
+# 判定为"审批弹窗中会被隐藏的危险控制字符"并拒绝执行，报错形如：
+#   "script contains control characters"
+# 而 Windows 上 git 默认 core.autocrlf=true 会在检出时把 LF 转成 CRLF，
+# 使 workflows/*.js 必然带 \r，从而 100% 触发该拒绝。
+#
+# 这里显式声明 eol=lf，覆盖用户的 core.autocrlf 设置，保证任何平台检出都是 LF。
+* text=auto eol=lf
+
+# 二进制文件不做任何换行符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.zip binary
+*.ico binary

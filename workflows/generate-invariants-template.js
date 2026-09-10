@@ -217,7 +217,7 @@ const contractsResult = await agent(contractDiscoveryPrompt(targetContracts), {
 
 const contracts = contractsResult.coreContracts || []
 if (!contracts.length) {
-  log('⚠ 未发现任何核心合约，流程结束')
+  log('⚠️ 未发现任何核心合约，流程结束')
   return { error: '无可分析的合约' }
 }
 log(`发现 ${contracts.length} 个核心合约`)
@@ -234,7 +234,7 @@ const candidates = invResult.candidates || []
 log(`识别了 ${candidates.length} 条候选不变量`)
 
 if (!candidates.length) {
-  log('⚠ 未识别到任何不变量，返回空清单')
+  log('⚠️ 未识别到任何不变量，返回空清单')
 }
 
 phase('清单生成与保存')
@@ -262,7 +262,7 @@ try {
 }
 
 if (!archive || archive.status !== 'Written') {
-  log(`⚠ 不变量清单写入失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
+  log(`⚠️ 不变量清单写入失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
 } else {
   log(`✅ 不变量清单已生成并保存到 ${INVARIANTS_PATH}（${candidates.length} 条不变量）`)
 }

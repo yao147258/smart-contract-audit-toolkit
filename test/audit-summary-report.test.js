@@ -15,19 +15,17 @@ const extractPureHelpers = () => {
   const beginNewline = workflowSource.indexOf('\n', beginIdx)
   let code = workflowSource.substring(beginNewline + 1, endIdx)
 
-  // 收集所有 export 的函数名和常量名（包括 const 和 function）
-  // 注意：这条正则是"生产文件里的 export 关键字不可删除"的原因，见生产文件哨兵区块顶部的说明。
+  // 收集所有被 /*@export*/ 标记的函数名和常量名（包括 const 和 function）
+  // 注意：这条正则是"生产文件里的 /*@export*/ 标记不可删除"的原因，见生产文件哨兵区块顶部的说明。
   const exportNames = []
-  const exportMatch = [...code.matchAll(/export\s+(?:function|const)\s+(\w+)/g)]
+  const exportMatch = [...code.matchAll(/\/\*@export\*\/\s*(?:function|const)\s+(\w+)/g)]
   exportMatch.forEach(m => exportNames.push(m[1]))
 
-  // 也收集 REPORT_STAGE_NAMES（无 export 前缀）
+  // 也收集 REPORT_STAGE_NAMES（无 /*@export*/ 标记）
   if (code.includes('const REPORT_STAGE_NAMES')) {
     exportNames.unshift('REPORT_STAGE_NAMES')
   }
 
-  // 移除 export 关键字
-  code = code.split('\n').map(line => line.replace(/^export\s+/, '')).join('\n')
 
   // 末尾追加返回语句
   const exportList = exportNames.join(', ')
@@ -94,23 +92,64 @@ test('workflow 静态声明固定五阶段并保留顶层返回契约', () => {
   assert.match(returnBlock, /\barchive\b/)
 })
 
-test('三个 workflow 文件都能按宿主语义（AsyncFunction）解析', () => {
+// 所有 workflow 脚本，守卫测试统一覆盖（新增 workflow 必须加进来）
+const ALL_WORKFLOWS = [
+  'smart-contract-audit-pipeline.js',
+  'invariant-fuzz-campaign.js',
+  'formal-verification-halmos.js',
+  'generate-scope-template.js',
+  'generate-invariants-template.js',
+]
+
+const readWorkflow = (file) =>
+  readFileSync(fileURLToPath(new URL(`../workflows/${file}`, import.meta.url)), 'utf8')
+
+test('所有 workflow 文件都能按宿主语义（AsyncFunction）解析', () => {
   // node --check 对这些文件永远失败：Dynamic Workflow 契约要求顶层裸 return，
   // 而 --check 不套函数包装器，会报 Illegal return statement。这不是 bug，是预期行为。
   // 因此用与宿主一致的 AsyncFunction 构造来做语法校验（只构造、不执行）。
+  //
+  // 重要（回归防护）：这里过去写着 .replace(/^export /gm, '')，把源码里**所有** export
+  // 都先剥干净再校验。那等于把宿主真正会报的错误屏蔽掉 —— 测试全绿，但 workflow
+  // 一运行就 SyntaxError: Unexpected keyword 'export'。
+  //
+  // 宿主的真实行为是：只把开头的 `export const meta` 单独摘出来解析，剩下的脚本体
+  // 原样塞进 async 函数。所以这里只能剥 meta 这一行，其余一律保持原样。
+  // 「脚本体内不得有其它顶层 export」由下一个测试单独守卫。
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
-  const files = [
-    'smart-contract-audit-pipeline.js',
-    'invariant-fuzz-campaign.js',
-    'formal-verification-halmos.js',
-  ]
-  for (const file of files) {
-    const source = readFileSync(fileURLToPath(new URL(`../workflows/${file}`, import.meta.url)), 'utf8')
-      .replace(/^export /gm, '')
+  for (const file of ALL_WORKFLOWS) {
+    const source = readWorkflow(file).replace(/^export const meta\b/m, 'const meta')
     assert.doesNotThrow(
       () => new AsyncFunction('args', 'agent', 'pipeline', 'parallel', 'phase', 'log', source),
       `workflows/${file} 语法错误`
     )
+  }
+})
+
+test('workflow 脚本体内不得出现 export const meta 之外的顶层 export', () => {
+  // 宿主把脚本体包进 async 函数执行，函数体内的 export 是语法错误。
+  // 唯一允许的是文件开头由宿主单独解析的 export const meta。
+  for (const file of ALL_WORKFLOWS) {
+    const offenders = readWorkflow(file)
+      .split('\n')
+      .map((line, i) => ({ line, no: i + 1 }))
+      .filter(({ line }) => /^export\b/.test(line) && !/^export const meta\b/.test(line))
+    assert.deepEqual(
+      offenders.map(o => `${o.no}: ${o.line}`),
+      [],
+      `workflows/${file} 存在非法顶层 export，应改用 /*@export*/ 注释标记`
+    )
+  }
+})
+
+test('workflow 脚本不得包含 CR（\\r），否则被宿主判为控制字符而拒绝执行', () => {
+  // Claude Code 权限层把 \r 当作"审批弹窗里会被隐藏的危险控制字符"并拒绝启动脚本。
+  // Windows 上 core.autocrlf=true 会在检出时引入 CRLF，因此仓库根目录有 .gitattributes
+  // 强制 eol=lf。这条测试是那份配置失效时的兜底告警。
+  for (const file of ALL_WORKFLOWS) {
+    const source = readWorkflow(file)
+    const crLines = source.split('\n').reduce((n, line) => n + (line.endsWith('\r') ? 1 : 0), 0)
+    assert.equal(crLines, 0, `workflows/${file} 有 ${crLines} 行以 CR 结尾，应为纯 LF 换行`)
   }
 })
 

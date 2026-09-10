@@ -32,9 +32,13 @@ export const meta = {
 }
 
 // ==== BEGIN HALMOS VERIFICATION REPORT PURE HELPERS (提取自本文件供 test/halmos-verification-report.test.js 用 eval 执行，禁止在此区块内使用 import/require/文件系统/网络) ====
-// 注意：本区块内的 `export` 关键字是测试提取哈希的依据 —— test/halmos-verification-report.test.js 里的
-// extractPureHelpers() 用正则 /export\s+(?:function|const)\s+(\w+)/g 收集要暴露给沙箱的符号名。
-// 一旦删掉这些 `export`，收集结果为空，两个 helper 会全部变成 undefined，测试以 TypeError 失败。
+// 注意：本区块内的 `/*@export*/` 注释标记是测试提取符号的依据 —— test/halmos-verification-report.test.js 里的
+// extractPureHelpers() 用正则 /\/\*@export\*\/\s*(?:function|const)\s+(\w+)/g 收集要暴露给沙箱的符号名。
+// 一旦删掉这些标记，收集结果为空，helper 会全部变成 undefined，测试以 TypeError 失败。
+// 为什么用注释标记而不是 `export` 关键字（血泪，勿改回去）：
+//   Workflow 宿主把整个脚本体包进一个 async 函数里执行（这也是顶层 return 能用的原因），
+//   函数体内出现 `export` 会直接 SyntaxError: Unexpected keyword 'export'，整个 workflow 起不来。
+//   只有文件开头的 `export const meta` 由宿主单独解析，必须保留原样，不要加标记。
 function markdownCell(value) {
   if (value === undefined || value === null || value === '') return '未提供'
   return String(value).replaceAll('|', '\\|').replace(/[\r\n]+/g, '<br>')
@@ -48,7 +52,7 @@ function booleanValue(value) {
   return value === true ? '是' : value === false ? '否' : '未提供'
 }
 
-export function buildHalmosVerificationMarkdown(input = {}) {
+/*@export*/ function buildHalmosVerificationMarkdown(input = {}) {
   const runParams = input.runParams || {}
   const global = input.global || {}
   const modules = Array.isArray(input.modules) ? input.modules.filter(Boolean) : []
@@ -118,7 +122,7 @@ const ARCHIVE_SCHEMA = {
 
 // 已知局限（与 smart-contract-audit-pipeline.js 的归档同理，有意保留）：
 // 逐字写入不保证 100% 可靠；工作流侧只做长度核对，拦不住语义级篡改，只拦"明显被概括/截断"。
-export function reportArchivePrompt(markdown) {
+/*@export*/ function reportArchivePrompt(markdown) {
   const length = typeof markdown === 'string' ? markdown.length : 0
   return `把围栏之间的 Halmos 形式化验证报告原样覆盖写入目标仓库的 ${ARCHIVE_PATH}。
 若目录不存在，创建 .audit/reports/；不要修改任何其他文件，不要重写或概括报告，不得编造写入成功。
@@ -258,12 +262,12 @@ ${JSON.stringify(moduleResults.map(r => ({ file: r.file, report: r.report })))}
 // ---------------------------------------------------------------------------
 async function proveStage(spec, mod, loopBound) {
   if (!spec || !spec.ready) {
-    log(`⚠ ${mod.file}：证明装置未就绪（${(spec && spec.blockedReason) || '未知原因'}），跳过`)
+    log(`⚠️ ${mod.file}：证明装置未就绪（${(spec && spec.blockedReason) || '未知原因'}），跳过`)
     return { file: mod.file, spec, proofs: [] }
   }
   const properties = spec.properties || []
   if (!properties.length) {
-    log(`⚠ ${mod.file}：装置未产出任何可证明的性质，跳过`)
+    log(`⚠️ ${mod.file}：装置未产出任何可证明的性质，跳过`)
     return { file: mod.file, spec, proofs: [] }
   }
   // 同一模块的多条性质需要汇总进同一份模块报告，属于合理屏障
@@ -312,7 +316,7 @@ const results = await pipeline(
 
 const valid = results.filter(Boolean)
 const dropped = modules.length - valid.length
-if (dropped > 0) log(`⚠ ${dropped}/${modules.length} 个模块在流水线某阶段失败，已跳过，未计入最终报告`)
+if (dropped > 0) log(`⚠️ ${dropped}/${modules.length} 个模块在流水线某阶段失败，已跳过，未计入最终报告`)
 
 phase('结果汇总')
 const globalReport = await agent(globalPrompt(valid), { phase: '结果汇总', schema: GLOBAL_SCHEMA, label: '总报告' })
@@ -353,7 +357,7 @@ try {
   archive = { status: 'Failed', path: ARCHIVE_PATH, error: `报告生成或归档异常：${(err && err.message) || String(err)}` }
 }
 if (!archive || archive.status !== 'Written') {
-  log(`⚠ Halmos 验证报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
+  log(`⚠️ Halmos 验证报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
 }
 
 return {

@@ -16,9 +16,8 @@ const extractPureHelpers = () => {
   const beginNewline = workflowSource.indexOf('\n', beginIdx)
   let code = workflowSource.substring(beginNewline + 1, endIdx)
 
-  const exportNames = [...code.matchAll(/export\s+(?:function|const)\s+(\w+)/g)].map(m => m[1])
+  const exportNames = [...code.matchAll(/\/\*@export\*\/\s*(?:function|const)\s+(\w+)/g)].map(m => m[1])
 
-  code = code.split('\n').map(line => line.replace(/^export\s+/, '')).join('\n')
   code += `\nreturn { ${exportNames.join(', ')} };`
 
   const wrapper = `'use strict';\n${code}\n`

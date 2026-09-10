@@ -27,10 +27,13 @@ export const meta = {
 }
 
 // ==== BEGIN AUDIT SUMMARY REPORT PURE HELPERS (提取自本文件供 test/audit-summary-report.test.js 用 eval 执行，禁止在此区块内使用 import/require/文件系统/网络) ====
-// 注意：本区块内的 `export` 关键字是测试提取哈希的依据 —— test/audit-summary-report.test.js 里的
-// extractPureHelpers() 用正则 /export\s+(?:function|const)\s+(\w+)/g 收集要暴露给沙箱的符号名。
-// 一旦删掉这些 `export`，收集结果为空，三个 helper 会全部变成 undefined，测试以 TypeError 失败。
-// 因此即使"Dynamic Workflow 宿主并不需要这些 export"，也不要因为"清理无用关键字"把它们删掉。
+// 注意：本区块内的 `/*@export*/` 注释标记是测试提取符号的依据 —— test/audit-summary-report.test.js 里的
+// extractPureHelpers() 用正则 /\/\*@export\*\/\s*(?:function|const)\s+(\w+)/g 收集要暴露给沙箱的符号名。
+// 一旦删掉这些标记，收集结果为空，helper 会全部变成 undefined，测试以 TypeError 失败。
+// 为什么用注释标记而不是 `export` 关键字（血泪，勿改回去）：
+//   Workflow 宿主把整个脚本体包进一个 async 函数里执行（这也是顶层 return 能用的原因），
+//   函数体内出现 `export` 会直接 SyntaxError: Unexpected keyword 'export'，整个 workflow 起不来。
+//   只有文件开头的 `export const meta` 由宿主单独解析，必须保留原样，不要加标记。
 const REPORT_STAGE_NAMES = [
   '准备',
   'L1 静态扫描',
@@ -43,7 +46,7 @@ function displayValue(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '未提供'
 }
 
-export function normalizeReportMetadata(metadata = {}) {
+/*@export*/ function normalizeReportMetadata(metadata = {}) {
   const source = metadata || {}
   const suppliedStages = Array.isArray(source.stages) ? source.stages : []
   return {
@@ -72,7 +75,7 @@ function markdownCell(value) {
 
 // 审计范围文档的唯一权威路径。这个值必须与 workflows/generate-scope-template.js 里的
 // SCOPE_PATH 保持一致，改动时两处必须同步，否则本流水线会因为找不到文件而永久早退。
-export const SCOPE_PATH = '.audit/scope.md'
+/*@export*/ const SCOPE_PATH = '.audit/scope.md'
 
 // 范围文档门禁：纯函数，不调大模型，避免让 AI 给自己的前置条件打分。
 // 三条硬性条件（任一不满足即早退，且没有参数可以绕过）：
@@ -81,7 +84,7 @@ export const SCOPE_PATH = '.audit/scope.md'
 //   ③ 文末签字栏的确认人与确认日期都已填写。
 // fail-closed：上下文 agent 返回空值/结构异常时一律判为不通过——
 // "读不出来"和"确认过了"绝不能等价，否则这道前置形同虚设。
-export function evaluateScopeGate(context) {
+/*@export*/ function evaluateScopeGate(context) {
   const source = context || {}
 
   if (source.scopeExists !== true) {
@@ -117,7 +120,7 @@ function booleanValue(value) {
   return value === true ? '是' : value === false ? '否' : '未提供'
 }
 
-export function buildAuditSummaryMarkdown(input = {}) {
+/*@export*/ function buildAuditSummaryMarkdown(input = {}) {
   const metadata = normalizeReportMetadata(input.metadata)
   const targets = Array.isArray(input.targets) ? input.targets : []
   const categories = Array.isArray(input.categories) ? input.categories : []
@@ -251,7 +254,7 @@ const ARCHIVE_SCHEMA = {
 //    agent 可选返回 writtenLength，主流程用纯代码与 markdown.length 比较，偏差过大时把 status 强制降级为 Failed。
 //    这不能证明内容逐字正确，只能拦住"被明显概括/截断"这一类最常见的失效。
 // 3. markdown 内容源自被审合约源码（外部不可信输入），因此用围栏 + 显式声明把"数据"与"指令"隔开。
-export function archivePrompt(markdown) {
+/*@export*/ function archivePrompt(markdown) {
   const length = typeof markdown === 'string' ? markdown.length : 0
   return `把围栏之间的审计总报告原样覆盖写入目标仓库的 ${ARCHIVE_PATH}。
 若目录不存在，创建 .audit/reports/；不要修改任何其他文件，不要重写或概括报告，不得编造写入成功。
@@ -568,7 +571,7 @@ ${JSON.stringify(attackerOut)}
 }
 
 function judgePrompt(cat, target, fixerOut, scopeSummary) {
-  return `L2 语义审计 —— 角色④⚖裁判（默认每一条发现都是错的，除非代码逐行证明成立）。
+  return `L2 语义审计 —— 角色④⚖️裁判（默认每一条发现都是错的，除非代码逐行证明成立）。
 汇总前三个角色的产出：
 ${JSON.stringify(fixerOut)}
 
@@ -670,7 +673,7 @@ async function l2Stage(target, l1, context, categories) {
   )
   const valid = categoryResults.filter(Boolean)
   const dropped = categories.length - valid.length
-  if (dropped > 0) log(`⚠ ${target}：有 ${dropped}/${categories.length} 个 L2 专项类别在某一角色环节失败，已跳过（未静默计入"已通过"）`)
+  if (dropped > 0) log(`⚠️ ${target}：有 ${dropped}/${categories.length} 个 L2 专项类别在某一角色环节失败，已跳过（未静默计入"已通过"）`)
   const confirmedFindings = valid.flatMap(r => r.confirmedFindings || [])
   return { target, l1, categories: valid, confirmedFindings }
 }
@@ -685,7 +688,7 @@ async function l3Stage(l2Out, target, skipL3) {
     f => (f.status === 'Confirmed' || f.status === 'NeedsPoC') && (f.severity === 'Critical' || f.severity === 'High')
   )
   if (skipL3) {
-    if (needsEvidence.length > 0) log(`⚠ ${target}：skipL3=true，跳过 ${needsEvidence.length} 条 Critical/High 的 PoC 验证，门禁将标记为未通过`)
+    if (needsEvidence.length > 0) log(`⚠️ ${target}：skipL3=true，跳过 ${needsEvidence.length} 条 Critical/High 的 PoC 验证，门禁将标记为未通过`)
     return { ...l2Out, pocResults: [] }
   }
   if (!needsEvidence.length) {
@@ -766,7 +769,7 @@ const perTarget = await pipeline(
 
 const valid = perTarget.filter(Boolean)
 const droppedTargets = targets.length - valid.length
-if (droppedTargets > 0) log(`⚠ ${droppedTargets}/${targets.length} 个目标合约在流水线某阶段失败，已跳过，未计入最终报告`)
+if (droppedTargets > 0) log(`⚠️ ${droppedTargets}/${targets.length} 个目标合约在流水线某阶段失败，已跳过，未计入最终报告`)
 
 const globalReport = await agent(globalSynthesisPrompt(valid, l1), { schema: GLOBAL_SCHEMA, label: 'L4-总报告' })
 
@@ -813,7 +816,7 @@ try {
   archive = { status: 'Failed', path: ARCHIVE_PATH, error: `报告生成或归档异常：${(err && err.message) || String(err)}` }
 }
 if (!archive || archive.status !== 'Written') {
-  log(`⚠ 审计总报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
+  log(`⚠️ 审计总报告归档失败：${archive && archive.error ? archive.error : '归档 agent 未返回成功状态'}`)
 }
 
 return {
