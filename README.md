@@ -206,6 +206,26 @@ formal-verification-halmos
 
 未传入的字段统一显示为"未提供"；插件不会推断实际模型、审查人或执行时间。
 
+### L2 审计留痕：怎么检查 AI 的每一步
+
+总报告里每个合约下面，除了「发现明细」和「PoC 验证」，还有几个专门给人核对用的小节：
+
+| 小节 | 看什么 | 怎么用 |
+|---|---|---|
+| **发现明细 → 大白话说明** | 每条确认发现用 2~3 句话讲清楚：谁、在什么情况下、能做什么、造成什么后果 | 先看这一列判断严重性，看不懂再看攻击路径 |
+| **L2 专项执行轨迹** | 每个专项的候选数、有攻击路径数、补丁数、确认数、拒绝数、去向未登记数，以及四个角色的提示词指纹 | 候选数应等于"确认 + 拒绝"；状态不是「完成」的专项**没有结论，不等于没问题** |
+| **规格重建** | AI 认为这个合约"应该保证什么" | 性价比最高的检查点：理解错了，该专项后面的结论都要打折扣 |
+| **被裁判拒绝的发现** | 裁判拒掉的每一条和拒绝理由 | 建议每轮随机抽查约 10%，抽到误杀说明裁判偏严 |
+| **去向未登记的候选发现** | 审计员提过、但裁判确认/拒绝列表里都找不到同名条目的发现 | 只在有问题时出现，可能是被改名或被漏判，需要人工核对 |
+
+专项失败和去向未登记这两类问题由代码直接写进「人工复核事项」，不依赖 AI 记得提。
+
+**提示词指纹**：同一合约同一专项两次跑出不同结论时，先比指纹——指纹相同说明输入一致、差异来自模型随机性；指纹不同说明输入变了（代码、上下文或提示词有改动）。
+
+**结构化轨迹文件** `.audit/reports/audit-trace-latest.json`：记录每个合约 × 每个专项 × 四个角色的输出（规格重建、候选发现、攻击路径、补丁、确认/拒绝结果）和提示词指纹，供事后逐条回溯或脚本分析。它和总报告分开写，写失败只记在返回值的 `traceArchive` 字段里并告警，不影响总报告和门禁。更原始的逐 agent 输入输出由 Claude Code 记录在本次运行会话目录的 `journal.jsonl` 中。
+
+**表达规范**：所有面向人的输出（L1 发现描述、L2 四个角色、PoC 证据、L4 报告与总览）统一要求用大白话写——先说结论再说原因、术语第一次出现时顺带解释、说清后果而不是只抛术语。
+
 ### 不变量模糊测试报告
 
 每轮 `invariant-fuzz-campaign` 正常走完流程后，会覆盖生成 `.audit/reports/invariant-fuzz-latest.md`。内容包含本轮运行参数（引擎/轮数/时间预算）、概览、阻断项（Falsified）、逐不变量结果，以及每条不变量按引擎展开的明细（状态、调用次数、反例、corpus 目录）。
@@ -229,6 +249,7 @@ formal-verification-halmos
 - `.audit/regression/` —— PoC/反例回归测试永久保留目录
 - `.audit/reports/` —— L1 扫描原始报告与各工作流的 `-latest.md` 汇总报告
 - `.audit/reports/audit-latest.md` —— `smart-contract-audit-pipeline` 本轮 L1–L4 的整体汇总、门禁、PoC、人工复核项和可选元信息；每次运行覆盖更新
+- `.audit/reports/audit-trace-latest.json` —— `smart-contract-audit-pipeline` 本轮 L2 每个专项四个角色的结构化输出与提示词指纹，用于逐条回溯；每次运行覆盖更新
 - `.audit/reports/invariant-fuzz-latest.md` —— `invariant-fuzz-campaign` 本轮不变量模糊测试结果（Falsified/PassedThisRound/Skipped）；每次运行覆盖更新
 - `.audit/reports/halmos-verification-latest.md` —— `formal-verification-halmos` 本轮 Halmos 有界证明结果（Proved/Counterexample/Inconclusive）；每次运行覆盖更新
 

@@ -25,6 +25,10 @@
 - 新增使用指南 `docs/generate-scope-guide.md`：范围文档怎么生成、人工签字具体怎么做、为什么代码推断出来的假设也要签字，以及 pipeline 报"审计范围文档未就绪"时的常见卡点与处理方式。
 - `smart-contract-audit-pipeline` 新增审计总报告产物 `.audit/reports/audit-latest.md`：汇总全局门禁、L1 扫描结果、逐合约发现与 PoC、人工复核事项，每轮覆盖写入；返回值新增 `archive: { status, path, error }` 字段，归档失败会在日志中告警并如实记录，不影响门禁结论。
 - `smart-contract-audit-pipeline` 新增可选参数 `args.metadata`：可传入审查开始/结束时间、总耗时、审查模型、审查人以及各阶段耗时，写入总报告；未传入的字段统一显示为"未提供"，插件不做任何推断。
+- `smart-contract-audit-pipeline` 新增 L2 审计留痕：`l2Stage` 按专项记录四个角色的输出与提示词指纹（FNV-1a，`promptFingerprint`），由纯函数 `buildCategoryTrace` 整理成轨迹；总报告每个合约新增「L2 专项执行轨迹」「规格重建」「被裁判拒绝的发现」「去向未登记的候选发现」四个小节，此前被直接丢弃的 rejectedFindings 现在连同拒绝理由可供抽查。
+- 新增裁判对账 `reconcileJudgeOutput`（纯代码）：审计员的每条候选发现必须以原标题出现在裁判的确认或拒绝列表之一，找不到的标为"去向未登记"；它与"某专项在某角色环节失败"一起由代码直接写入「人工复核事项」。裁判提示词同步新增对账规则。
+- 新增结构化轨迹文件 `.audit/reports/audit-trace-latest.json`，返回值新增 `traceArchive` 字段；与总报告分开归档、分开做异常隔离，失败不影响总报告与门禁。两份归档共用纯函数 `checkArchiveResult` 做路径与长度校验，`archivePrompt` 新增可选的路径与文档名参数。
+- 新增表达规范 `PLAIN_LANGUAGE_RULE`，注入 L1、L2 四个角色、L3 PoC、L4 报告与总览的提示词；裁判的 confirmedFindings 新增必填字段 `plainExplanation`（2~3 句大白话说明），在「发现明细」表中单独成列。
 
 ### Changed
 
