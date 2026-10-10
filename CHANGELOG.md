@@ -29,6 +29,10 @@
 - 新增裁判对账 `reconcileJudgeOutput`（纯代码）：审计员的每条候选发现必须以原标题出现在裁判的确认或拒绝列表之一，找不到的标为"去向未登记"；它与"某专项在某角色环节失败"一起由代码直接写入「人工复核事项」。裁判提示词同步新增对账规则。
 - 新增结构化轨迹文件 `.audit/reports/audit-trace-latest.json`，返回值新增 `traceArchive` 字段；与总报告分开归档、分开做异常隔离，失败不影响总报告与门禁。两份归档共用纯函数 `checkArchiveResult` 做路径与长度校验，`archivePrompt` 新增可选的路径与文档名参数。
 - 新增表达规范 `PLAIN_LANGUAGE_RULE`，注入 L1、L2 四个角色、L3 PoC、L4 报告与总览的提示词；裁判的 confirmedFindings 新增必填字段 `plainExplanation`（2~3 句大白话说明），在「发现明细」表中单独成列。
+- `generate-scope-template` 支持读取业务文档：新增「文档收集」阶段与可选参数 `args.docs`（数组或逗号分隔字符串，`normalizeDocArgs` 规范化）；不指定时自动在 `docs/`、`spec/`、`design/` 等目录和仓库根目录查找。支持 Markdown、TXT、PDF，Word 尝试用 pandoc/解压提取，读不到的文档如实标出原因；从文档提取编号化的业务要求（REQ-xx），系统与角色分析、经济模型两个阶段都会参考。
+- 信任假设依据新增 `doc-stated`（渲染为「文档声明（出处）」），新增 `source` 字段记录需求编号与文档章节。
+- `generate-scope-template` 新增「文档与代码对照」阶段与 scope.md 第 6 章：每条业务要求给出 一致 / 不一致 / 代码未实现 / 无法判断 结论，并列出代码有、文档未提及的重要行为；纯函数 `reconcileRequirementChecks` 对账，漏掉的条目标为「未核对」。第 6 章不参与放行门禁。返回值新增 `docs`、`docCheck`。
+- `smart-contract-audit-pipeline` 的上下文摘要新增第⑥段「文档与代码不一致要点」（读取 scope.md 第 6 章），L2 业务逻辑专项的审计员必须逐条处理其中涉及当前合约的条目。
 
 ### Changed
 

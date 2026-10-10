@@ -424,3 +424,10 @@ test('l2Stage 记录轨迹并随结果传到 l4Stage，主流程归档轨迹文�
   const returnBlock = workflowSource.slice(workflowSource.lastIndexOf('return {'))
   assert.match(returnBlock, /traceArchive/)
 })
+
+test('上下文加载读取 scope.md 第 6 章，业务逻辑专项逐条处理文档与代码不一致条目', () => {
+  const context = workflowSource.slice(workflowSource.indexOf('function contextPrompt('))
+  assert.match(context.slice(0, context.indexOf('\n}\n')), /第 6 章「文档与代码对照」/)
+  const auditor = workflowSource.slice(workflowSource.indexOf('function auditorPrompt('))
+  assert.match(auditor.slice(0, auditor.indexOf('\n}\n')), /cat\.key === 'business-logic'[\s\S]*?文档与代码不一致要点/)
+})

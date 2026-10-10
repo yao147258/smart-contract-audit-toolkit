@@ -653,7 +653,7 @@ const CONTEXT_SCHEMA = {
     scopeConfirmedBy: { type: 'string', description: '文末签字栏「确认人」的原文。空白、"（待填写）"或类似占位一律返回空字符串' },
     scopeConfirmedAt: { type: 'string', description: '文末签字栏「确认日期」的原文。空白、"（待填写）"或类似占位一律返回空字符串' },
     scopeSummary: { type: 'string', description: '范围文档要点摘要（核心资产、角色权限、已确认的信任假设、审计边界），供 L2 审计员与裁判角色判断"什么是被允许的行为"' },
-    summary: { type: 'string', description: '完整审计上下文摘要（五段，不超过 1200 字）' },
+    summary: { type: 'string', description: '完整审计上下文摘要（六段，不超过 1500 字；第⑥段为文档与代码不一致要点）' },
   },
   required: ['scopeExists', 'unconfirmedAssumptions', 'scopeConfirmedBy', 'scopeConfirmedAt', 'summary'],
 }
@@ -672,8 +672,9 @@ function contextPrompt() {
 3. scopeConfirmedBy / scopeConfirmedAt：读文末「人工签字」表格。仍是"（待填写）"、空白或任何占位符时返回空字符串，不要用文档里其他地方出现的人名或日期顶替；
 4. scopeSummary：把范围文档浓缩成要点（核心资产、角色权限矩阵、已确认的信任假设、审计边界），后续 L2 的审计员与裁判角色靠它判断"哪些行为是设计允许的、哪些才是漏洞"。
 
-summary 字段填不超过 1200 字的审计上下文摘要，分五段：
-①审计范围与信任假设要点  ②已知不变量要点  ③已确认误报要点（供后续各专项审计跳过）  ④已豁免问题要点  ⑤经济模型/资金流转要点。
+summary 字段填不超过 1500 字的审计上下文摘要，分六段：
+①审计范围与信任假设要点  ②已知不变量要点  ③已确认误报要点（供后续各专项审计跳过）  ④已豁免问题要点  ⑤经济模型/资金流转要点
+⑥文档与代码不一致要点：读 ${SCOPE_PATH} 第 6 章「文档与代码对照」，把「需要关注的条目」（不一致 / 代码未实现 / 无法判断 / 未核对）和「代码有、文档未提及的行为」逐条列出，保留需求编号、代码位置和文档出处，不要概括合并——这些是业务逻辑审计最重要的线索。第 6 章不存在或写明未做对照时，如实写"未做文档与代码对照"。
 若 ${SCOPE_PATH} 不存在，summary 里如实说明，其余字段按上述规则填空值。
 严格按 schema 返回 JSON。`
 }
@@ -729,7 +730,8 @@ ${COMMON_FALSE_POSITIVES}
 任务：
 1. 只读 ${target} 源码，重建它在"${cat.label}"专项下应当保证的规格/不变量；
 2. 逐条列出该专项下的疑似发现（candidateFindings），每条给出准确位置（函数名/行号范围）与描述；
-3. 没有发现就返回空数组，不要为了凑数而报告。
+3. 没有发现就返回空数组，不要为了凑数而报告。${cat.key === 'business-logic' ? `
+4. 本专项必须逐条处理上下文摘要第⑥段「文档与代码不一致要点」里涉及 ${target} 的条目：判断它是真实的业务逻辑缺陷（列为候选发现，描述里注明需求编号）还是文档过时/设计如此（不列，但在 rebuiltSpec 末尾用一句话说明理由）。` : ''}
 
 ${PLAIN_LANGUAGE_RULE}
 严格按 schema 返回 JSON。`
@@ -861,7 +863,7 @@ function computeGates(l1, confirmedFindings, pocResults) {
 // L2 单目标：四角色对抗 × 多专项类别（专项之间用 pipeline，无阻塞并行推进）
 // ---------------------------------------------------------------------------
 async function l2Stage(target, l1, context, categories) {
-  // context 是 CONTEXT_SCHEMA 结构：审计员吃完整五段摘要，裁判额外吃范围文档要点——
+  // context 是 CONTEXT_SCHEMA 结构：审计员吃完整六段摘要，裁判额外吃范围文档要点——
   // "管理员能抽走手续费"算不算漏洞，完全取决于信任假设，裁判才是做这个取舍的角色。
   const contextSummary = (context && context.summary) || ''
   const scopeSummary = (context && (context.scopeSummary || context.summary)) || ''

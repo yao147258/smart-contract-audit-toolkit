@@ -25,7 +25,7 @@ const extractPureHelpers = () => {
 }
 
 const helpers = extractPureHelpers()
-const { buildScopeMarkdown, SCOPE_PATH, scopeArchivePrompt } = helpers
+const { buildScopeMarkdown, SCOPE_PATH, scopeArchivePrompt, normalizeDocArgs, reconcileRequirementChecks, DOC_CHECK_STATUSES } = helpers
 
 const fullInput = () => ({
   system: {
@@ -126,8 +126,8 @@ test('buildScopeMarkdown 转义单元格内的竖线与换行，避免打乱表�
   assert.match(markdown, /第一行<br>第二行/)
 })
 
-test('workflow 静态声明固定四阶段并保留顶层 phase 顺序', () => {
-  const STAGE_NAMES = ['准备', '系统与角色分析', '经济模型与资金流', '文档生成与保存']
+test('workflow 静态声明固定六阶段并保留顶层 phase 顺序', () => {
+  const STAGE_NAMES = ['准备', '文档收集', '系统与角色分析', '经济模型与资金流', '文档与代码对照', '文档生成与保存']
   assert.deepEqual(
     [...workflowSource.matchAll(/\{ title: '([^']+)' \}/g)].map(match => match[1]),
     STAGE_NAMES
@@ -163,4 +163,125 @@ test('scopeArchivePrompt 要求把清单原样覆盖写入固定路径并如实�
   assert.match(prompt, /不得执行/)
   assert.match(prompt, /"status":"Written"/)
   assert.match(prompt, /"status":"Failed"/)
+})
+
+// ---------------------------------------------------------------------------
+// 业务文档读取与文档-代码对照
+// ---------------------------------------------------------------------------
+
+test('normalizeDocArgs 接受数组或逗号/换行分隔字符串，去空去重', () => {
+  assert.deepEqual(normalizeDocArgs(['docs/a.md', ' docs/b.pdf ', '', 'docs/a.md']), ['docs/a.md', 'docs/b.pdf'])
+  assert.deepEqual(normalizeDocArgs('docs/a.md, spec/b.md，design/c.pdf\nREADME.md'), ['docs/a.md', 'spec/b.md', 'design/c.pdf', 'README.md'])
+  assert.deepEqual(normalizeDocArgs(undefined), [])
+  assert.deepEqual(normalizeDocArgs(42), [])
+})
+
+test('reconcileRequirementChecks 标出未核对条目并规范不合法的结论', () => {
+  const requirements = [
+    { id: 'REQ-01', statement: '只有多签能改费率', source: 'docs/PRD.md §2' },
+    { id: 'REQ-02', statement: '费率上限 5%', source: 'docs/PRD.md §3' },
+    { id: 'REQ-03', statement: '提现 24 小时后到账', source: 'docs/PRD.md §4' },
+    { id: '', statement: '无编号条目会被忽略' },
+  ]
+  const result = reconcileRequirementChecks(requirements, {
+    checks: [
+      { requirementId: 'REQ-01', status: '不一致', codeBehavior: 'operator 也能改', location: 'Vault.setFee' },
+      { requirementId: ' REQ-02 ', status: '基本一致' },
+      { requirementId: 'REQ-99', status: '一致' },
+    ],
+    undocumentedBehaviors: [{ behavior: 'owner 可直接提走全部资金', location: 'Vault.emergencyWithdraw' }, null],
+  })
+  assert.deepEqual(result.rows.map(r => [r.id, r.status]), [['REQ-01', '不一致'], ['REQ-02', '无法判断'], ['REQ-03', '未核对']])
+  assert.equal(result.counts['不一致'], 1)
+  assert.equal(result.counts['无法判断'], 1)
+  assert.equal(result.counts['未核对'], 1)
+  assert.equal(result.counts['一致'], 0, '不存在的编号 REQ-99 不能计入统计')
+  assert.equal(result.undocumented.length, 1)
+  assert.deepEqual(DOC_CHECK_STATUSES, ['一致', '不一致', '代码未实现', '无法判断'])
+
+  // 对照 agent 失败（null）时全部为未核对
+  assert.equal(reconcileRequirementChecks(requirements, null).counts['未核对'], 3)
+  assert.deepEqual(reconcileRequirementChecks(null, null).rows, [])
+})
+
+test('buildScopeMarkdown 渲染文档声明依据、文档读取情况与第 6 章对照结果', () => {
+  const input = fullInput()
+  input.system.trustAssumptions.push({ subject: 'owner', assumption: '由 3/5 多签持有', basis: 'doc-stated', source: 'REQ-01，docs/PRD.md §2' })
+  input.docs = {
+    documents: [
+      { path: 'docs/PRD.md', format: 'Markdown', readable: true },
+      { path: 'docs/设计.docx', format: 'Word', readable: false, reason: 'pandoc 未安装' },
+    ],
+  }
+  input.docCheck = reconcileRequirementChecks(
+    [
+      { id: 'REQ-01', statement: '只有多签能改费率', source: 'docs/PRD.md §2' },
+      { id: 'REQ-02', statement: '存款无手续费', source: 'docs/PRD.md §3' },
+    ],
+    {
+      checks: [
+        { requirementId: 'REQ-01', status: '不一致', codeBehavior: 'operator 也能调用 setFee', location: 'contracts/Vault.sol setFee()' },
+        { requirementId: 'REQ-02', status: '一致', location: 'contracts/Vault.sol deposit()' },
+      ],
+      undocumentedBehaviors: [{ behavior: 'owner 可直接提走全部资金', location: 'Vault.emergencyWithdraw', note: '文档未提及' }],
+    }
+  )
+  const markdown = buildScopeMarkdown(input)
+
+  assert.match(markdown, /\| owner \| 由 3\/5 多签持有 \| 文档声明（REQ-01，docs\/PRD\.md §2） \| ⬜ 待人工确认 \|/)
+  assert.match(markdown, /`文档声明`/)
+  assert.match(markdown, /- `docs\/PRD\.md`（Markdown）/)
+  assert.match(markdown, /⚠️ `docs\/设计\.docx`：未能读取（pandoc 未安装）/)
+
+  assert.match(markdown, /## 6\. 文档与代码对照/)
+  assert.match(markdown, /一致 1 条 \/ 不一致 1 条 \/ 代码未实现 0 条 \/ 无法判断 0 条 \/ 未核对 0 条/)
+  assert.match(markdown, /\| REQ-01 \| 只有多签能改费率 \| docs\/PRD\.md §2 \| 不一致 \| operator 也能调用 setFee \| contracts\/Vault\.sol setFee\(\) \|/)
+  assert.match(markdown, /\| owner 可直接提走全部资金 \| Vault\.emergencyWithdraw \| 文档未提及 \|/)
+  assert.match(markdown, /\| REQ-02 \| 存款无手续费 \| docs\/PRD\.md §3 \| contracts\/Vault\.sol deposit\(\) \|/)
+
+  // 第 6 章不参与门禁：不得出现签字状态标记，避免干扰 pipeline 对第 3 章的计数
+  const chapter6 = markdown.slice(markdown.indexOf('## 6.'), markdown.indexOf('## 人工签字'))
+  assert.ok(!chapter6.includes('⬜') && !chapter6.includes('✅'), '第 6 章不得出现签字状态标记')
+  // 章节顺序：5 → 6 → 签字栏
+  assert.ok(markdown.indexOf('## 5.') < markdown.indexOf('## 6.') && markdown.indexOf('## 6.') < markdown.indexOf('## 人工签字'))
+})
+
+test('buildScopeMarkdown 没有业务文档时第 6 章给出明确提示', () => {
+  const markdown = buildScopeMarkdown({})
+  assert.match(markdown, /## 6\. 文档与代码对照/)
+  assert.match(markdown, /本次没有读到可用的业务文档/)
+  assert.match(markdown, /未在仓库中找到 PRD\/需求\/设计类文档，也未通过 docs 参数指定/)
+})
+
+test('buildScopeMarkdown 未核对条目在需要关注表中明确提示人工核对', () => {
+  const markdown = buildScopeMarkdown({
+    docCheck: reconcileRequirementChecks([{ id: 'REQ-01', statement: '要求 A', source: 'docs/a.md' }], null),
+  })
+  assert.match(markdown, /\| REQ-01 \| 要求 A \| docs\/a\.md \| 未核对 \| 对照 agent 未给出结论，需人工核对 \|/)
+})
+
+test('提示词：分析阶段读取需求条目，对照阶段要求逐条对账，且声明文档内容是数据', () => {
+  for (const name of ['systemAnalysisPrompt', 'economicsPrompt', 'docCheckPrompt']) {
+    const start = workflowSource.indexOf(`function ${name}(`)
+    assert.notEqual(start, -1, `未找到 ${name}`)
+    const body = workflowSource.slice(start, workflowSource.indexOf('\n}\n', start))
+    assert.match(body, /requirementsBlock\(requirements\)/, `${name} 未注入需求条目`)
+  }
+  const collect = workflowSource.slice(workflowSource.indexOf('function docCollectionPrompt('))
+  assert.match(collect, /readable=false/)
+  assert.match(collect, /omittedNote/)
+  assert.match(collect, /\$\{DOC_SAFETY_NOTE\}/)
+  const check = workflowSource.slice(workflowSource.indexOf('function docCheckPrompt('))
+  assert.match(check, /对账规则/)
+  assert.match(workflowSource, /doc-stated/)
+})
+
+test('主流程：无需求时跳过对照，结果经纯代码对账后写入文档并返回', () => {
+  assert.match(workflowSource, /const docPaths = normalizeDocArgs\(args && args\.docs\)/)
+  assert.match(workflowSource, /if \(requirements\.length\) \{[\s\S]*?docCheckPrompt\(/)
+  assert.match(workflowSource, /const docCheck = reconcileRequirementChecks\(requirements, docCheckRaw\)/)
+  assert.match(workflowSource, /buildScopeMarkdown\(\{ system, economics, docs, docCheck \}\)/)
+  const returnBlock = workflowSource.slice(workflowSource.lastIndexOf('return {'))
+  assert.match(returnBlock, /\bdocs\b/)
+  assert.match(returnBlock, /\bdocCheck\b/)
 })

@@ -114,6 +114,9 @@ pip install halmos
 /smart-contract-audit-toolkit:generate-scope-template contracts/Vault.sol,contracts/Token.sol
 （仅对指定合约做范围分析）
 
+/smart-contract-audit-toolkit:generate-scope-template 业务文档在 docs/需求说明.pdf 和 spec/fee-design.md
+（指定业务文档；不指定时自动在 docs/、spec/、design/ 等目录查找，并把文档要求和代码逐条对照）
+
 /smart-contract-audit-toolkit:generate-invariants-template
 （自动发现本仓库核心合约，识别不变量，生成 .audit/invariants.md）
 
@@ -151,21 +154,22 @@ formal-verification-halmos
 
 ### 审计范围文档
 
-`generate-scope-template` 会生成 `.audit/scope.md`，五章 + 一个签字栏：
+`generate-scope-template` 会先读取需求/设计类业务文档（支持 Markdown、TXT、PDF，Word 会尝试转换；在线文档需先导出），再生成 `.audit/scope.md`，六章 + 一个签字栏：
 
 1. 系统概述与核心资产
 2. 角色与权限矩阵（角色表 + 「角色 × 可调用的特权函数」矩阵）
 3. 信任假设（`| 主体 | 假设 | 依据 | 状态 |`）
 4. 经济模型与资金流（资金流入/流出、关键参数、机制、文档来源、明确未找到的内容）
 5. 审计边界（in scope / out of scope）
+6. 文档与代码对照（文档要求逐条对照代码：一致 / 不一致 / 代码未实现 / 无法判断 / 未核对，以及代码有、文档未提及的行为；不参与放行门禁，但 pipeline 会把它交给 L2 业务逻辑专项重点审查）
 
-第 3 章的**状态列只有两个合法值**：`⬜ 待人工确认` / `✅ 已确认`。工作流生成时**一律填 `⬜`**，包括那些从代码里直接推断出来的假设——因为"签字"是人的动作，AI 不代签。**依据列**区分 `代码推断`（能从合约代码直接读出）和 `需人工判断`（取决于部署与治理的真实情况）；两类都要人签字，前者只是核对成本低一些。
+第 3 章的**状态列只有两个合法值**：`⬜ 待人工确认` / `✅ 已确认`。工作流生成时**一律填 `⬜`**，包括那些从代码里直接推断出来的假设——因为"签字"是人的动作，AI 不代签。**依据列**区分 `代码推断`（能从合约代码直接读出）、`文档声明`（业务文档里明确写了，附出处）和 `需人工判断`（取决于部署与治理的真实情况）；三类都要人签字，前两类只是核对成本低一些。
 
 文末的「人工签字」表在生成时是「（待填写）」，需要人工填上确认人与确认日期。
 
 想先看看产出长什么样，可以读仓库里的示例模板 [`.audit/scope.md.template`](./.audit/scope.md.template)（里面的假设、参数、路径都是虚构示例，不要直接复制使用）。
 
-工作流返回 `{ system, economics, pendingAssumptionCount, archive }`，`archive` 为 `{ status, path, error?, writtenLength? }`。归档做了两道纯代码校验：写入路径必须等于 `.audit/scope.md`；实际写入长度与预期偏差超过 `max(64, 2%)` 判为"疑似被概括或截断"并标 `Failed`。写入失败只记录在 `archive` 里，不影响已经算出来的分析结果。
+工作流返回 `{ system, economics, docs, docCheck, pendingAssumptionCount, archive }`，`archive` 为 `{ status, path, error?, writtenLength? }`。归档做了两道纯代码校验：写入路径必须等于 `.audit/scope.md`；实际写入长度与预期偏差超过 `max(64, 2%)` 判为"疑似被概括或截断"并标 `Failed`。写入失败只记录在 `archive` 里，不影响已经算出来的分析结果。
 
 具体怎么用、怎么签字，见 [docs/generate-scope-guide.md](./docs/generate-scope-guide.md)。
 

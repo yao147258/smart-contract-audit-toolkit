@@ -52,6 +52,9 @@ generate-scope-template →（人工逐条签字 .audit/scope.md）→ generate-
 
 /smart-contract-audit-toolkit:generate-scope-template 只分析 contracts/Vault.sol 和 contracts/Token.sol
 
+/smart-contract-audit-toolkit:generate-scope-template 业务文档在 docs/需求说明.pdf 和 spec/fee-design.md
+（对应 args.docs；用户提到需求文档、PRD、设计文档时，把路径传进 docs。在线文档需先让用户导出成文件放进仓库）
+
 /smart-contract-audit-toolkit:generate-invariants-template
 （自动发现本仓库核心合约，识别不变量，生成 .audit/invariants.md；无需任何外部工具）
 
