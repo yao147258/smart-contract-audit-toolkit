@@ -36,6 +36,7 @@
 
 ### Changed
 
+- `generate-scope-template` 产出的 `.audit/scope.md` 改为「少而精、看得懂」：① 从源头压缩条目——信任假设同类合并、最多约 15 条并按影响资金程度排序（超出只告警不截断），权限矩阵同角色同合约合并为一行、不列只读函数，资金入口同类合并，参数只留影响资金或权限的，文档需求提取上限由 60 条降为 30 条；合并/省略的内容写进新增的「本文档做了哪些精简」一节，不悄悄丢信息；② 第 3 章新增「如果不成立会怎样」「你怎么核对」两列（状态列仍在最后，pipeline 门禁不受影响）；第 6 章「需要关注的条目」新增「这意味着什么」列，「已核对一致的条目」改为紧凑列表；③ 新增「怎么读这份文档」与「附录：术语表」，所有分析 agent 共用 `PLAIN_LANGUAGE_RULE` 写法规则（先大白话、后括号代码名）。示例模板 `.audit/scope.md.template` 同步更新。
 - `smart-contract-audit-pipeline` 的「加载审计上下文」agent 从输出纯文本改为输出结构化 JSON（新增 `CONTEXT_SCHEMA`），字段：`scopeExists` / `unconfirmedAssumptions[]` / `scopeConfirmedBy` / `scopeConfirmedAt` / `scopeSummary` / `summary`。改动理由：范围门禁必须靠可被代码检查的字段做判断，不能依赖一段"看起来像确认过了"的自然语言。
 - 上下文摘要从四段扩为五段（新增第①段「审计范围与信任假设要点」），字数上限从 800 字提高到 1200 字。
 - 上下文 agent 现在优先读 `.audit/scope.md`；若其第 4 章已写明经济模型与资金流，直接采信，不再重复去翻 PRD 类文档。

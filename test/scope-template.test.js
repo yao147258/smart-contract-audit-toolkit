@@ -42,7 +42,7 @@ const fullInput = () => ({
       { role: 'owner', contract: 'contracts/Vault.sol', functions: ['setFee', 'pause'], note: '无时锁保护' },
     ],
     trustAssumptions: [
-      { subject: 'owner (多签)', assumption: '假定不作恶且私钥未泄露', basis: 'needs-human' },
+      { subject: 'owner (多签)', assumption: '假定不作恶且私钥未泄露', basis: 'needs-human', impactIfBroken: '管理员可以一次性卷走所有用户存款', howToVerify: '到区块浏览器查 owner 地址是否为 3/5 多签' },
       { subject: 'USDC', assumption: '标准 ERC20，无 fee-on-transfer', basis: 'code-inferred' },
     ],
     inScope: ['contracts/Vault.sol', 'contracts/libraries/MathLib.sol'],
@@ -82,8 +82,11 @@ test('buildScopeMarkdown 生成的信任假设一律为待确认状态，依据�
   const markdown = buildScopeMarkdown(fullInput())
 
   // AI 不代签：即使是代码推断出来的假设，状态列也必须是"待人工确认"
-  assert.match(markdown, /\| owner \(多签\) \| 假定不作恶且私钥未泄露 \| 需人工判断 \| ⬜ 待人工确认 \|/)
-  assert.match(markdown, /\| USDC \| 标准 ERC20，无 fee-on-transfer \| 代码推断 \| ⬜ 待人工确认 \|/)
+  // 每条假设都要讲清"不成立会怎样"和"怎么核对"，状态列固定在最后一列
+  assert.match(markdown, /\| 主体 \| 假设 \| 如果不成立会怎样 \| 你怎么核对 \| 依据 \| 状态 \|/)
+  assert.match(markdown, /\| owner \(多签\) \| 假定不作恶且私钥未泄露 \| 管理员可以一次性卷走所有用户存款 \| 到区块浏览器查 owner 地址是否为 3\/5 多签 \| 需人工判断 \| ⬜ 待人工确认 \|/)
+  // 模型漏填后果/核对方法时给出占位，而不是留空
+  assert.match(markdown, /\| USDC \| 标准 ERC20，无 fee-on-transfer \| 待人工补充 \| 待人工补充 \| 代码推断 \| ⬜ 待人工确认 \|/)
 
   // 第 3 章表格内不得出现任何已确认标记（顶部放行规则里的字面示例除外，那是给人看的填写说明）
   const section = markdown.slice(markdown.indexOf('## 3. 信任假设'), markdown.indexOf('## 4.'))
@@ -95,6 +98,9 @@ test('buildScopeMarkdown 渲染资产、权限矩阵与资金流明细', () => {
 
   assert.match(markdown, /\| USDC \| ERC20 \| Vault 合约余额 \| 用户存入的本金 \|/)
   assert.match(markdown, /\| owner \| contracts\/Vault\.sol \| `setFee`、`pause` \| 无时锁保护 \|/)
+  // 已带大白话说明的函数不整段套代码格式
+  const plain = buildScopeMarkdown({ system: { permissions: [{ role: 'owner', contract: 'V.sol', functions: ['改手续费（`setFee`）', 'pause'] }] } })
+  assert.match(plain, /\| owner \| V\.sol \| 改手续费（`setFee`）、`pause` \|/)
   assert.match(markdown, /\| 流入 \| deposit\(\) \| contracts\/Vault\.sol \| 用户存入 USDC \|/)
   assert.match(markdown, /\| 流出 \| withdraw\(\) \| contracts\/Vault\.sol \| 用户赎回本金与收益 \|/)
   assert.match(markdown, /\| feeBps \| 50 \| owner \| 提取手续费 \|/)
@@ -220,7 +226,7 @@ test('buildScopeMarkdown 渲染文档声明依据、文档读取情况与第 6 �
     ],
     {
       checks: [
-        { requirementId: 'REQ-01', status: '不一致', codeBehavior: 'operator 也能调用 setFee', location: 'contracts/Vault.sol setFee()' },
+        { requirementId: 'REQ-01', status: '不一致', codeBehavior: 'operator 也能调用 setFee', risk: '非多签角色可以把手续费调到任意值', location: 'contracts/Vault.sol setFee()' },
         { requirementId: 'REQ-02', status: '一致', location: 'contracts/Vault.sol deposit()' },
       ],
       undocumentedBehaviors: [{ behavior: 'owner 可直接提走全部资金', location: 'Vault.emergencyWithdraw', note: '文档未提及' }],
@@ -228,16 +234,17 @@ test('buildScopeMarkdown 渲染文档声明依据、文档读取情况与第 6 �
   )
   const markdown = buildScopeMarkdown(input)
 
-  assert.match(markdown, /\| owner \| 由 3\/5 多签持有 \| 文档声明（REQ-01，docs\/PRD\.md §2） \| ⬜ 待人工确认 \|/)
+  assert.match(markdown, /\| owner \| 由 3\/5 多签持有 \| 待人工补充 \| 待人工补充 \| 文档声明（REQ-01，docs\/PRD\.md §2） \| ⬜ 待人工确认 \|/)
   assert.match(markdown, /`文档声明`/)
   assert.match(markdown, /- `docs\/PRD\.md`（Markdown）/)
   assert.match(markdown, /⚠️ `docs\/设计\.docx`：未能读取（pandoc 未安装）/)
 
   assert.match(markdown, /## 6\. 文档与代码对照/)
   assert.match(markdown, /一致 1 条 \/ 不一致 1 条 \/ 代码未实现 0 条 \/ 无法判断 0 条 \/ 未核对 0 条/)
-  assert.match(markdown, /\| REQ-01 \| 只有多签能改费率 \| docs\/PRD\.md §2 \| 不一致 \| operator 也能调用 setFee \| contracts\/Vault\.sol setFee\(\) \|/)
+  assert.match(markdown, /\| REQ-01 \| 只有多签能改费率 \| docs\/PRD\.md §2 \| 不一致 \| operator 也能调用 setFee \| 非多签角色可以把手续费调到任意值 \| contracts\/Vault\.sol setFee\(\) \|/)
   assert.match(markdown, /\| owner 可直接提走全部资金 \| Vault\.emergencyWithdraw \| 文档未提及 \|/)
-  assert.match(markdown, /\| REQ-02 \| 存款无手续费 \| docs\/PRD\.md §3 \| contracts\/Vault\.sol deposit\(\) \|/)
+  // 一致条目只需过目，用紧凑列表而不是宽表格
+  assert.match(markdown, /- REQ-02 存款无手续费（出处：docs\/PRD\.md §3；代码：contracts\/Vault\.sol deposit\(\)）/)
 
   // 第 6 章不参与门禁：不得出现签字状态标记，避免干扰 pipeline 对第 3 章的计数
   const chapter6 = markdown.slice(markdown.indexOf('## 6.'), markdown.indexOf('## 人工签字'))
@@ -257,7 +264,70 @@ test('buildScopeMarkdown 未核对条目在需要关注表中明确提示人工�
   const markdown = buildScopeMarkdown({
     docCheck: reconcileRequirementChecks([{ id: 'REQ-01', statement: '要求 A', source: 'docs/a.md' }], null),
   })
-  assert.match(markdown, /\| REQ-01 \| 要求 A \| docs\/a\.md \| 未核对 \| 对照 agent 未给出结论，需人工核对 \|/)
+  assert.match(markdown, /\| REQ-01 \| 要求 A \| docs\/a\.md \| 未核对 \| 对照 agent 未给出结论，需人工核对 \| 待人工补充 \|/)
+})
+
+test('buildScopeMarkdown 输出阅读指引、精简说明与合并去重的术语表', () => {
+  const input = fullInput()
+  input.system.glossary = [
+    { term: '多签', explanation: '需要多个人共同签名才能执行操作的钱包' },
+    { term: 'fee-on-transfer', explanation: '转账时自动扣一部分手续费的代币' },
+  ]
+  input.system.condensedNote = '把 owner 相关的 3 条假设合并成 1 条'
+  input.economics.glossary = [
+    { term: '多签', explanation: '重复术语应被去重' },
+    { term: '清算', explanation: '借款人抵押不足时，任何人可以替他还债并低价拿走抵押物' },
+    { term: '', explanation: '无名术语忽略' },
+  ]
+  input.docs = { documents: [], omittedNote: '附录 B 未提取' }
+  const markdown = buildScopeMarkdown(input)
+
+  assert.match(markdown, /## 怎么读这份文档/)
+  assert.match(markdown, /### 本文档做了哪些精简/)
+  assert.match(markdown, /把 owner 相关的 3 条假设合并成 1 条/)
+  assert.match(markdown, /附录 B 未提取/)
+
+  assert.match(markdown, /## 附录：术语表/)
+  assert.match(markdown, /\| 多签 \| 需要多个人共同签名才能执行操作的钱包 \|/)
+  assert.ok(!markdown.includes('重复术语应被去重'), '同名术语只保留第一次出现的解释')
+  assert.match(markdown, /\| 清算 \|/)
+  assert.ok(!markdown.includes('无名术语忽略'))
+  // 签字栏仍在文末，术语表不得出现签字状态标记
+  assert.ok(markdown.indexOf('## 附录：术语表') < markdown.indexOf('## 人工签字'))
+  const appendix = markdown.slice(markdown.indexOf('## 附录：术语表'), markdown.indexOf('## 人工签字'))
+  assert.ok(!appendix.includes('⬜') && !appendix.includes('✅'))
+})
+
+test('buildScopeMarkdown 无精简与术语时给出明确的"无"', () => {
+  const markdown = buildScopeMarkdown({})
+  const condensed = markdown.slice(markdown.indexOf('### 本文档做了哪些精简'), markdown.indexOf('## 1.'))
+  assert.match(condensed, /\n- 无\n/)
+  assert.match(markdown, /## 附录：术语表\n\n- 无/)
+})
+
+test('reconcileRequirementChecks 透传"这意味着什么"字段', () => {
+  const result = reconcileRequirementChecks(
+    [{ id: 'REQ-01', statement: 'A', source: 'x' }],
+    { checks: [{ requirementId: 'REQ-01', status: '不一致', risk: '可能被盗' }] }
+  )
+  assert.equal(result.rows[0].risk, '可能被盗')
+})
+
+test('提示词：要求合并压缩、上限、大白话写法、后果与核对方法、术语表', () => {
+  const sys = workflowSource.slice(workflowSource.indexOf('function systemAnalysisPrompt('))
+  assert.match(sys, /15 条/)
+  assert.match(sys, /impactIfBroken/)
+  assert.match(sys, /howToVerify/)
+  assert.match(sys, /condensedNote/)
+  for (const name of ['systemAnalysisPrompt', 'economicsPrompt', 'docCheckPrompt']) {
+    const start = workflowSource.indexOf(`function ${name}(`)
+    const body = workflowSource.slice(start, workflowSource.indexOf('\n}\n', start))
+    assert.match(body, /\$\{PLAIN_LANGUAGE_RULE\}/, `${name} 未注入大白话写法规则`)
+  }
+  const collect = workflowSource.slice(workflowSource.indexOf('function docCollectionPrompt('))
+  assert.match(collect, /最多 30 条/)
+  const check = workflowSource.slice(workflowSource.indexOf('function docCheckPrompt('))
+  assert.match(check, /risk/)
 })
 
 test('提示词：分析阶段读取需求条目，对照阶段要求逐条对账，且声明文档内容是数据', () => {
