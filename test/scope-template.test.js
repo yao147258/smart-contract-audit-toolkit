@@ -267,25 +267,21 @@ test('buildScopeMarkdown 未核对条目在需要关注表中明确提示人工�
   assert.match(markdown, /\| REQ-01 \| 要求 A \| docs\/a\.md \| 未核对 \| 对照 agent 未给出结论，需人工核对 \| 待人工补充 \|/)
 })
 
-test('buildScopeMarkdown 输出阅读指引、精简说明与合并去重的术语表', () => {
+test('buildScopeMarkdown 输出阅读指引与合并去重的术语表，不再输出精简说明', () => {
   const input = fullInput()
   input.system.glossary = [
     { term: '多签', explanation: '需要多个人共同签名才能执行操作的钱包' },
     { term: 'fee-on-transfer', explanation: '转账时自动扣一部分手续费的代币' },
   ]
-  input.system.condensedNote = '把 owner 相关的 3 条假设合并成 1 条'
   input.economics.glossary = [
     { term: '多签', explanation: '重复术语应被去重' },
     { term: '清算', explanation: '借款人抵押不足时，任何人可以替他还债并低价拿走抵押物' },
     { term: '', explanation: '无名术语忽略' },
   ]
-  input.docs = { documents: [], omittedNote: '附录 B 未提取' }
   const markdown = buildScopeMarkdown(input)
 
   assert.match(markdown, /## 怎么读这份文档/)
-  assert.match(markdown, /### 本文档做了哪些精简/)
-  assert.match(markdown, /把 owner 相关的 3 条假设合并成 1 条/)
-  assert.match(markdown, /附录 B 未提取/)
+  assert.ok(!markdown.includes('本文档做了哪些精简'), '精简说明一节已移除')
 
   assert.match(markdown, /## 附录：术语表/)
   assert.match(markdown, /\| 多签 \| 需要多个人共同签名才能执行操作的钱包 \|/)
@@ -298,10 +294,8 @@ test('buildScopeMarkdown 输出阅读指引、精简说明与合并去重的术�
   assert.ok(!appendix.includes('⬜') && !appendix.includes('✅'))
 })
 
-test('buildScopeMarkdown 无精简与术语时给出明确的"无"', () => {
+test('buildScopeMarkdown 无术语时给出明确的"无"', () => {
   const markdown = buildScopeMarkdown({})
-  const condensed = markdown.slice(markdown.indexOf('### 本文档做了哪些精简'), markdown.indexOf('## 1.'))
-  assert.match(condensed, /\n- 无\n/)
   assert.match(markdown, /## 附录：术语表\n\n- 无/)
 })
 
@@ -318,7 +312,7 @@ test('提示词：要求合并压缩、上限、大白话写法、后果与核�
   assert.match(sys, /15 条/)
   assert.match(sys, /impactIfBroken/)
   assert.match(sys, /howToVerify/)
-  assert.match(sys, /condensedNote/)
+  assert.ok(!workflowSource.includes('condensedNote'), 'condensedNote 已无消费方，不应再出现')
   for (const name of ['systemAnalysisPrompt', 'economicsPrompt', 'docCheckPrompt']) {
     const start = workflowSource.indexOf(`function ${name}(`)
     const body = workflowSource.slice(start, workflowSource.indexOf('\n}\n', start))

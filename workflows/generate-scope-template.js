@@ -187,16 +187,6 @@ function renderDocCheckChapter(docCheck) {
   return lines
 }
 
-// 精简说明：agent 合并/省略了什么必须摆在明面上，"少而精"不能变成"悄悄丢信息"
-function renderCondensedNotes(docs, system, economics) {
-  const notes = [
-    ['文档需求提取', docs.omittedNote],
-    ['资产、角色与信任假设', system.condensedNote],
-    ['经济模型与资金流', economics.condensedNote],
-  ].filter(([, note]) => typeof note === 'string' && note.trim())
-  return notes.length ? notes.map(([where, note]) => `- **${where}**：${scopeCell(note.trim())}`) : ['- 无']
-}
-
 // 术语表：多个 agent 各自返回，按术语名去重（保留第一次出现的解释）
 function renderGlossary(...sources) {
   const seen = new Set()
@@ -246,12 +236,6 @@ function renderGlossary(...sources) {
     '- **第 1、2、4、5 章是背景**：帮你理解这套合约管着什么钱、谁有什么权限、钱从哪进从哪出，不需要签字，但有明显错误请直接改；',
     '- **第 6 章是文档与代码的差异**：重点看「需要关注的条目」，判断是代码写错了还是文档过时了；',
     '- **看不懂的词查文末「附录：术语表」**；代码里的函数名、变量名统一写在括号或反引号里，前面的中文才是它的意思。',
-    '',
-    '### 本文档做了哪些精简',
-    '',
-    '> 为了让每条都值得看，生成时把同类条目合并、去掉了与审计无关的琐碎条目。被合并或省略的内容如实列在这里：',
-    '',
-    ...renderCondensedNotes(docs, system, economics),
     '',
     '## 1. 系统概述与核心资产',
     '',
@@ -494,7 +478,6 @@ const SYSTEM_ANALYSIS_SCHEMA = {
         required: ['term', 'explanation'],
       },
     },
-    condensedNote: { type: 'string', description: '合并或省略了哪些条目（如"owner 相关的 4 条假设合并为 1 条"），没有就留空' },
   },
   required: ['overview', 'assets', 'roles', 'trustAssumptions', 'glossary'],
 }
@@ -564,7 +547,6 @@ const ECONOMICS_SCHEMA = {
         required: ['term', 'explanation'],
       },
     },
-    condensedNote: { type: 'string', description: '合并或省略了哪些资金入口/参数/机制，没有就留空' },
   },
   required: ['fundsIn', 'fundsOut'],
 }
@@ -664,7 +646,7 @@ const PLAIN_LANGUAGE_RULE = `写法要求（读者不一定懂 Solidity，必须
 - 先写大白话，再在括号里给代码名，如"设置手续费（\`setFee\`）""暂停合约（\`pause\`）"；不得只写函数名、变量名、函数签名或 REQ 编号而不解释；
 - 每条用一两句话说完，不要堆砌技术细节；数值写清单位和含义（如"50 个基点，即 0.5%"）；
 - 用到的专业术语（多签、时锁、预言机、fee-on-transfer、份额、清算等）全部收进 glossary，各用一句大白话解释；
-- 宁可少而精：同类条目合并成一条，与资金安全和权限无关的琐碎条目不要列；合并或省略了什么写进 condensedNote，不要悄悄丢掉。`
+- 宁可少而精：同类条目合并成一条，与资金安全和权限无关的琐碎条目不要列。`
 
 // 把需求条目压成提示词里的紧凑列表，供系统分析、经济模型与对照三个 agent 共用
 function requirementsBlock(requirements) {
@@ -778,7 +760,7 @@ ${JSON.stringify({ roles: system && system.roles, permissions: system && system.
 
 判断标准要严：只有逐行读过代码、确认行为和文档一致，才能标"一致"。拿不准就标"无法判断"并说明原因，不要为了好看标"一致"。
 ${PLAIN_LANGUAGE_RULE}
-（本阶段不需要返回 glossary 和 condensedNote，忽略写法要求里关于这两个字段的部分；文件路径保留原样。）
+（本阶段不需要返回 glossary，忽略写法要求里关于它的部分；文件路径保留原样。）
 ${DOC_SAFETY_NOTE}
 严格按 schema 返回。`
 }
