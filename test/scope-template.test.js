@@ -25,7 +25,10 @@ const extractPureHelpers = () => {
 }
 
 const helpers = extractPureHelpers()
-const { buildScopeMarkdown, SCOPE_PATH, scopeArchivePrompt, normalizeDocArgs, reconcileRequirementChecks, DOC_CHECK_STATUSES } = helpers
+const {
+  buildScopeMarkdown, SCOPE_PATH, scopeArchivePrompt, normalizePathArgs, reconcileRequirementChecks, DOC_CHECK_STATUSES,
+  checkScopeArgs, reconcileScopePaths, findUnreadableDocs, applyScopeBoundary,
+} = helpers
 
 const fullInput = () => ({
   system: {
@@ -175,11 +178,139 @@ test('scopeArchivePrompt 要求把清单原样覆盖写入固定路径并如实�
 // 业务文档读取与文档-代码对照
 // ---------------------------------------------------------------------------
 
-test('normalizeDocArgs 接受数组或逗号/换行分隔字符串，去空去重', () => {
-  assert.deepEqual(normalizeDocArgs(['docs/a.md', ' docs/b.pdf ', '', 'docs/a.md']), ['docs/a.md', 'docs/b.pdf'])
-  assert.deepEqual(normalizeDocArgs('docs/a.md, spec/b.md，design/c.pdf\nREADME.md'), ['docs/a.md', 'spec/b.md', 'design/c.pdf', 'README.md'])
-  assert.deepEqual(normalizeDocArgs(undefined), [])
-  assert.deepEqual(normalizeDocArgs(42), [])
+test('normalizePathArgs 接受数组或逗号/换行分隔字符串，去空去重', () => {
+  assert.deepEqual(normalizePathArgs(['docs/a.md', ' docs/b.pdf ', '', 'docs/a.md']), ['docs/a.md', 'docs/b.pdf'])
+  assert.deepEqual(normalizePathArgs('docs/a.md, spec/b.md，design/c.pdf\nREADME.md'), ['docs/a.md', 'spec/b.md', 'design/c.pdf', 'README.md'])
+  assert.deepEqual(normalizePathArgs(undefined), [])
+  assert.deepEqual(normalizePathArgs(42), [])
+})
+
+// ---------------------------------------------------------------------------
+// 审计范围必须显式指定
+// ---------------------------------------------------------------------------
+
+test('checkScopeArgs 合约与文档都必须指定，缺任何一项都不通过并给出用法', () => {
+  const ok = checkScopeArgs({ contracts: 'contracts/Vault.sol, contracts/core/', docs: ['docs/PRD.md'] })
+  assert.equal(ok.ok, true)
+  assert.deepEqual(ok.contracts, ['contracts/Vault.sol', 'contracts/core/'])
+  assert.deepEqual(ok.docs, ['docs/PRD.md'])
+  assert.deepEqual(ok.errors, [])
+
+  for (const args of [undefined, null, {}, { contracts: ['contracts/Vault.sol'] }, { docs: ['docs/PRD.md'] }, { contracts: [], docs: '' }]) {
+    const r = checkScopeArgs(args)
+    assert.equal(r.ok, false, JSON.stringify(args))
+    assert.ok(r.errors.length > 0)
+    assert.match(r.usage, /contracts/)
+    assert.match(r.usage, /docs/)
+  }
+  assert.ok(checkScopeArgs({ docs: ['a.md'] }).errors.some(e => /合约/.test(e)))
+  assert.ok(checkScopeArgs({ contracts: ['a.sol'] }).errors.some(e => /文档/.test(e)))
+})
+
+test('checkScopeArgs 拒绝整仓扫描、越界路径、在线链接与非 .sol 的合约文件', () => {
+  for (const bad of ['.', './', '/', '*', 'contracts/**', '../other/A.sol', '/etc/A.sol', 'C:\\x\\A.sol', 'contracts/Vault.js']) {
+    const r = checkScopeArgs({ contracts: [bad], docs: ['docs/PRD.md'] })
+    assert.equal(r.ok, false, `合约路径 ${bad} 应被拒绝`)
+  }
+  for (const bad of ['.', 'https://feishu.cn/doc/x', '../PRD.md']) {
+    const r = checkScopeArgs({ contracts: ['contracts/Vault.sol'], docs: [bad] })
+    assert.equal(r.ok, false, `文档路径 ${bad} 应被拒绝`)
+  }
+  // 目录（无扩展名或以 / 结尾）是允许的
+  assert.equal(checkScopeArgs({ contracts: ['contracts/core', 'src/'], docs: ['docs/'] }).ok, true)
+})
+
+test('reconcileScopePaths 展开目录、只保留目录内的合法文件，任何路径有问题都不通过', () => {
+  const requested = { contracts: ['contracts/Vault.sol', 'contracts/core/'], docs: ['docs/PRD.md', 'spec'] }
+  const good = reconcileScopePaths(requested, {
+    entries: [
+      { path: 'contracts/Vault.sol', kind: 'contracts', exists: true, type: 'file' },
+      { path: 'contracts/core', kind: 'contracts', exists: true, type: 'directory', files: ['contracts/core/A.sol', 'contracts/core/README.md', 'contracts/other/X.sol', 'contracts/core/sub/B.sol'] },
+      { path: 'docs/PRD.md', kind: 'docs', exists: true, type: 'file' },
+      { path: 'spec/', kind: 'docs', exists: true, type: 'directory', files: ['spec/fee.md', 'spec/img.png', 'spec/v2.pdf'] },
+    ],
+  })
+  assert.equal(good.ok, true, good.errors.join('；'))
+  // 目录外的文件（agent 多报的）和非 .sol 文件都要被代码剔除；Vault.sol 去重后只出现一次
+  assert.deepEqual(good.contractFiles, ['contracts/Vault.sol', 'contracts/core/A.sol', 'contracts/core/sub/B.sol'])
+  assert.deepEqual(good.docFiles, ['docs/PRD.md', 'spec/fee.md', 'spec/v2.pdf'])
+
+  const bad = reconcileScopePaths(requested, {
+    entries: [
+      { path: 'contracts/Vault.sol', kind: 'contracts', exists: false, reason: '文件不存在' },
+      { path: 'contracts/core/', kind: 'contracts', exists: true, type: 'directory', files: ['contracts/core/README.md'] },
+      { path: 'docs/PRD.md', kind: 'docs', exists: true, type: 'file' },
+    ],
+  })
+  assert.equal(bad.ok, false)
+  assert.ok(bad.errors.some(e => e.includes('contracts/Vault.sol') && e.includes('文件不存在')))
+  assert.ok(bad.errors.some(e => e.includes('contracts/core/') && /\.sol/.test(e)), '目录里没有 .sol 必须报错')
+  assert.ok(bad.errors.some(e => e.includes('spec') && /未核实|未返回/.test(e)), 'agent 漏报的路径必须报错')
+
+  // agent 整体失败（null）时全部路径都报错，不能放行
+  const none = reconcileScopePaths(requested, null)
+  assert.equal(none.ok, false)
+  assert.equal(none.errors.length, 4)
+})
+
+test('findUnreadableDocs 列出未读到或文档收集 agent 漏报的文档', () => {
+  const files = ['docs/PRD.md', 'docs/设计.docx', 'spec/fee.md']
+  const problems = findUnreadableDocs(files, {
+    documents: [
+      { path: 'docs/PRD.md', readable: true },
+      { path: 'docs/设计.docx', readable: false, reason: 'pandoc 未安装' },
+    ],
+  })
+  assert.deepEqual(problems.map(p => p.path), ['docs/设计.docx', 'spec/fee.md'])
+  assert.match(problems[0].reason, /pandoc/)
+  assert.deepEqual(findUnreadableDocs(['docs/PRD.md'], { documents: [{ path: './docs/PRD.md', readable: true }] }), [])
+  assert.equal(findUnreadableDocs(files, null).length, 3)
+})
+
+test('applyScopeBoundary 由代码决定纳入范围：只含指定合约，排除项只能来自指定范围', () => {
+  const system = {
+    overview: 'x',
+    inScope: ['contracts/Hallucinated.sol'],
+    outOfScope: [
+      { path: 'contracts/core/IVault.sol', reason: '纯接口' },
+      { path: 'lib/openzeppelin/', reason: '第三方' },
+    ],
+  }
+  const result = applyScopeBoundary(system, ['contracts/Vault.sol', 'contracts/core/IVault.sol'])
+  assert.deepEqual(result.inScope, ['contracts/Vault.sol'])
+  assert.deepEqual(result.outOfScope.map(o => o.path), ['contracts/core/IVault.sol'])
+  assert.equal(result.overview, 'x')
+  assert.deepEqual(applyScopeBoundary(null, ['a.sol']).inScope, ['a.sol'])
+})
+
+test('提示词：不再自动扫描，只处理核实过的合约与文档清单', () => {
+  assert.ok(!/自动查找|自动发现|实地枚举 contracts/.test(workflowSource), '不得保留自动扫描分支')
+  const bodyOf = name => {
+    const start = workflowSource.indexOf(`function ${name}(`)
+    assert.notEqual(start, -1, `未找到 ${name}`)
+    return workflowSource.slice(start, workflowSource.indexOf('\n}\n', start))
+  }
+  assert.match(bodyOf('contractScopeBlock'), /只分析这些，不要分析清单之外的合约/)
+  for (const name of ['systemAnalysisPrompt', 'economicsPrompt', 'docCheckPrompt']) {
+    assert.match(bodyOf(name), /\$\{contractScopeBlock\(contractFiles\)\}/, `${name} 未限定合约范围`)
+  }
+  assert.match(bodyOf('docCollectionPrompt'), /不得读取清单之外的任何文件/)
+  const pathCheck = workflowSource.slice(workflowSource.indexOf('function pathCheckPrompt('))
+  assert.match(pathCheck, /git ls-files|ls/)
+  assert.match(pathCheck, /exists/)
+})
+
+test('主流程：缺参或路径无效时在任何分析 agent 之前早退', () => {
+  const main = workflowSource.slice(workflowSource.indexOf("phase('准备')"))
+  const argCheck = main.indexOf('checkScopeArgs(args)')
+  const firstAgent = main.indexOf('await agent(')
+  assert.ok(argCheck > -1 && argCheck < firstAgent, '入参检查必须在第一个 agent 之前')
+  assert.match(main, /return \{ error: '未指定审计范围'/)
+  assert.match(main, /reconcileScopePaths\(/)
+  assert.match(main, /return \{ error: '审计范围路径无效'/)
+  assert.match(main, /findUnreadableDocs\(/)
+  assert.match(main, /return \{ error: '业务文档无法读取'/)
+  assert.match(main, /applyScopeBoundary\(/)
 })
 
 test('reconcileRequirementChecks 标出未核对条目并规范不合法的结论', () => {
@@ -341,7 +472,6 @@ test('提示词：分析阶段读取需求条目，对照阶段要求逐条对�
 })
 
 test('主流程：无需求时跳过对照，结果经纯代码对账后写入文档并返回', () => {
-  assert.match(workflowSource, /const docPaths = normalizeDocArgs\(args && args\.docs\)/)
   assert.match(workflowSource, /if \(requirements\.length\) \{[\s\S]*?docCheckPrompt\(/)
   assert.match(workflowSource, /const docCheck = reconcileRequirementChecks\(requirements, docCheckRaw\)/)
   assert.match(workflowSource, /buildScopeMarkdown\(\{ system, economics, docs, docCheck \}\)/)

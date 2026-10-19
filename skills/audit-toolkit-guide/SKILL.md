@@ -20,7 +20,7 @@ description: 在智能合约仓库（Hardhat 项目）里做安全审计相关�
 **因此正确的引导方式是**：
 
 - 先看仓库里有没有 `.audit/scope.md`；
-- 没有 → 引导用户先跑 `/smart-contract-audit-toolkit:generate-scope-template`，并**明确告诉他生成完还需要人工逐条签字**（把第 3 章的 `⬜ 待人工确认` 改成 `✅ 已确认`，并填写文末签字栏的确认人与确认日期），签完才能跑 pipeline；
+- 没有 → 引导用户先跑 `/smart-contract-audit-toolkit:generate-scope-template`（必须指定要审计的合约和业务文档），并**明确告诉他生成完还需要人工逐条签字**（把第 3 章的 `⬜ 待人工确认` 改成 `✅ 已确认`，并填写文末签字栏的确认人与确认日期），签完才能跑 pipeline；
 - 有但还没签完 → 指出还差哪些条目，让人工补齐，不要替用户改状态列，也不要替用户填签字栏。**AI 不代签**。
 
 ## 五个工作流怎么选
@@ -47,13 +47,9 @@ generate-scope-template →（人工逐条签字 .audit/scope.md）→ generate-
 不需要理解底层 JSON 结构，直接用自然语言描述诉求即可，Claude 会解析成脚本内 `args`。**首次调用时如果检测到工具缺失，会自动尝试安装**（如果装不上会如实说明原因）。
 
 ```
-/smart-contract-audit-toolkit:generate-scope-template
-（自动发现本仓库核心合约，分析资产/角色权限/信任假设/资金流，生成 .audit/scope.md；无需任何外部工具）
-
-/smart-contract-audit-toolkit:generate-scope-template 只分析 contracts/Vault.sol 和 contracts/Token.sol
-
-/smart-contract-audit-toolkit:generate-scope-template 业务文档在 docs/需求说明.pdf 和 spec/fee-design.md
-（对应 args.docs；用户提到需求文档、PRD、设计文档时，把路径传进 docs。在线文档需先让用户导出成文件放进仓库）
+/smart-contract-audit-toolkit:generate-scope-template 合约 contracts/Vault.sol,contracts/core/ 文档 docs/需求说明.pdf,spec/
+（对应 args.contracts 与 args.docs，两项都必填，可以是文件或目录；生成 .audit/scope.md，无需任何外部工具。
+ 用户没说清要审哪些合约或没给业务文档时，先问清楚再调用，不要替用户猜路径；在线文档需先让用户导出成文件放进仓库）
 
 /smart-contract-audit-toolkit:generate-invariants-template
 （自动发现本仓库核心合约，识别不变量，生成 .audit/invariants.md；无需任何外部工具）

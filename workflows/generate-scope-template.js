@@ -4,15 +4,14 @@
 // 定位：产出 .audit/scope.md —— smart-contract-audit-pipeline 的硬前置。
 //   L2 语义审计的质量几乎完全取决于它知不知道"资产是什么、谁是攻击者、什么被假定可信"。
 //   没有这份文档，AI 只能报模式化漏洞，报不出业务逻辑偏差。
-// 用法：
-//   /smart-contract-audit-toolkit:generate-scope-template
-//   （自动发现核心合约，分析角色权限与资金流，生成 .audit/scope.md）
+// 用法（合约与文档都必须指定，可以是文件或目录；不会自行扫描仓库）：
+//   /smart-contract-audit-toolkit:generate-scope-template 合约 contracts/Vault.sol,contracts/core/ 文档 docs/PRD.md,spec/
+//   （等价于 args: { contracts: ['contracts/Vault.sol', 'contracts/core/'], docs: ['docs/PRD.md', 'spec/'] }）
 //
-//   /smart-contract-audit-toolkit:generate-scope-template contracts/Vault.sol,contracts/Token.sol
-//   （仅对指定合约分析）
-//
-//   /smart-contract-audit-toolkit:generate-scope-template 业务文档在 docs/需求说明.pdf 和 spec/fee-design.md
-//   （等价于 args: { docs: ['docs/需求说明.pdf', 'spec/fee-design.md'] }；不指定时自动在 docs/、spec/、design/ 等目录查找）
+// 范围检查（任何一道不过都直接中止，不产出文档）：
+//   1. 入参检查（纯代码）：缺合约或缺文档、整仓（.）、通配符、仓库外路径、在线链接、非 .sol 合约文件；
+//   2. 路径核实（agent 查事实 + 代码对账）：路径不存在、目录里没有 .sol / 可读文档；
+//   3. 文档读取检查：指定的文档有任何一份没读到正文。
 //
 // 重要：本 workflow 生成的信任假设一律标记为"⬜ 待人工确认"，AI 不代签。
 //   人工把状态改成"✅ 已确认"并填写文末签字栏之后，pipeline 才会放行。
@@ -75,13 +74,122 @@ function scopeTable(header, divider, rows, columnCount) {
   return lines
 }
 
-// args.docs 的规范化：既接受数组，也接受逗号/换行分隔的字符串（自然语言调用时常被解析成后者）。
-/*@export*/ function normalizeDocArgs(docs) {
-  const raw = Array.isArray(docs) ? docs : typeof docs === 'string' ? docs.split(/[,，\n]/) : []
+// args.contracts / args.docs 的规范化：既接受数组，也接受逗号/换行分隔的字符串（自然语言调用时常被解析成后者）。
+/*@export*/ function normalizePathArgs(paths) {
+  const raw = Array.isArray(paths) ? paths : typeof paths === 'string' ? paths.split(/[,，\n]/) : []
   const seen = new Set()
   return raw
     .map(item => (typeof item === 'string' ? item.trim() : ''))
     .filter(item => item && !seen.has(item) && seen.add(item))
+}
+
+// 路径比较用的统一形态：反斜杠转正斜杠、去掉开头的 ./ 和结尾的 /。"." 视为空（即整个仓库）。
+function normPath(p) {
+  const s = String(p || '').trim().replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '')
+  return s === '.' ? '' : s
+}
+
+/*@export*/ const CONTRACT_EXT = /\.sol$/i
+/*@export*/ const DOC_EXT = /\.(md|markdown|txt|pdf|docx?)$/i
+
+/*@export*/ const SCOPE_USAGE = `必须同时指定合约和业务文档，每项可以是文件或目录（目录只展开其中的 .sol / 文档文件，不会往外扫描）。
+示例：
+  args: { contracts: ['contracts/Vault.sol', 'contracts/core/'], docs: ['docs/PRD.md', 'spec/'] }
+  /smart-contract-audit-toolkit:generate-scope-template 合约 contracts/Vault.sol,contracts/core/ 文档 docs/PRD.md,spec/
+不接受：整个仓库（. 或 /）、通配符（* ?）、仓库外路径（.. 或绝对路径）、在线文档链接（请先导出成文件放进仓库）。`
+
+// 单个路径的静态检查（纯代码，不碰文件系统）：拦住"漫无目的扫描"和越界读取
+function pathArgError(raw, kind) {
+  const label = kind === 'contracts' ? '合约' : '文档'
+  const slashed = String(raw).trim().replace(/\\/g, '/')
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(slashed)) return `${label}路径「${raw}」是在线链接，请先导出成文件放进仓库`
+  if (slashed.startsWith('/') || /^[A-Za-z]:/.test(slashed)) return `${label}路径「${raw}」是绝对路径，请写仓库内的相对路径`
+  const p = normPath(raw)
+  if (!p) return `${label}路径「${raw}」指向整个仓库，必须写到具体的文件或目录`
+  if (/[*?]/.test(p)) return `${label}路径「${raw}」包含通配符，请写到具体的文件或目录`
+  if (p.split('/').includes('..')) return `${label}路径「${raw}」超出了仓库范围`
+  const last = p.split('/').pop()
+  if (kind === 'contracts' && /\.[A-Za-z0-9]+$/.test(last) && !CONTRACT_EXT.test(last)) {
+    return `合约路径「${raw}」不是 .sol 文件`
+  }
+  return ''
+}
+
+// 入参检查：合约与文档都必须显式指定，任何一项缺失或不合规都不放行
+/*@export*/ function checkScopeArgs(args) {
+  const source = args || {}
+  const contracts = normalizePathArgs(source.contracts)
+  const docs = normalizePathArgs(source.docs)
+  const errors = []
+  if (!contracts.length) errors.push('未指定合约（args.contracts）：本工作流不会自动扫描仓库，必须写明要审计哪些合约文件或目录')
+  if (!docs.length) errors.push('未指定业务文档（args.docs）：本工作流不会自行在仓库里找文档，必须写明需求/设计文档的文件或目录')
+  contracts.forEach(p => { const e = pathArgError(p, 'contracts'); if (e) errors.push(e) })
+  docs.forEach(p => { const e = pathArgError(p, 'docs'); if (e) errors.push(e) })
+  return { ok: errors.length === 0, contracts, docs, errors, usage: SCOPE_USAGE }
+}
+
+// 路径核实对账：agent 只负责报告文件系统的事实，放不放行由代码决定。
+// 目录展开结果只保留"确实在该目录下 + 扩展名合法"的文件，agent 多报的目录外文件一律剔除。
+/*@export*/ function reconcileScopePaths(requested, result) {
+  const req = requested || {}
+  const byPath = new Map()
+  scopeList(result && result.entries).forEach(e => {
+    const key = normPath(e.path)
+    if (key && !byPath.has(key)) byPath.set(key, e)
+  })
+  const errors = []
+  const collect = (paths, kind) => {
+    const ext = kind === 'contracts' ? CONTRACT_EXT : DOC_EXT
+    const files = []
+    scopeList(paths).forEach(p => {
+      const key = normPath(p)
+      const entry = byPath.get(key)
+      if (!entry) { errors.push(`「${p}」未核实：路径核实 agent 未返回该路径的结果`); return }
+      if (entry.exists !== true) { errors.push(`「${p}」不存在或无法访问（${entry.reason || '原因未知'}）`); return }
+      if (entry.type === 'directory') {
+        const inside = scopeList(entry.files).map(normPath).filter(f => f.startsWith(key + '/') && ext.test(f))
+        if (!inside.length) {
+          errors.push(kind === 'contracts'
+            ? `「${p}」目录下没有找到任何 .sol 合约文件`
+            : `「${p}」目录下没有找到可读格式的文档（md / txt / pdf / docx）`)
+          return
+        }
+        files.push(...inside)
+        return
+      }
+      if (kind === 'contracts' && !CONTRACT_EXT.test(key)) { errors.push(`「${p}」不是 .sol 合约文件`); return }
+      files.push(key)
+    })
+    return [...new Set(files)]
+  }
+  const contractFiles = collect(req.contracts, 'contracts')
+  const docFiles = collect(req.docs, 'docs')
+  return { ok: errors.length === 0, contractFiles, docFiles, errors }
+}
+
+// 文档收集后的检查：指定的每份文档都必须真正读到正文，读不到或被漏报的都列出来
+/*@export*/ function findUnreadableDocs(docFiles, docs) {
+  const byPath = new Map()
+  scopeList(docs && docs.documents).forEach(d => {
+    const key = normPath(d.path)
+    if (key && !byPath.has(key)) byPath.set(key, d)
+  })
+  return scopeList(docFiles).map(normPath).flatMap(path => {
+    const d = byPath.get(path)
+    if (!d) return [{ path, reason: '文档收集 agent 未返回该文档的读取结果' }]
+    if (d.readable !== true) return [{ path, reason: d.reason || '原因未知' }]
+    return []
+  })
+}
+
+// 审计边界由代码决定：纳入范围 = 核实过的合约清单减去排除项；排除项只能来自该清单，模型不能往范围里加东西
+/*@export*/ function applyScopeBoundary(system, contractFiles) {
+  const base = system || {}
+  const files = scopeList(contractFiles).map(normPath)
+  const allowed = new Set(files)
+  const outOfScope = scopeList(base.outOfScope).filter(o => allowed.has(normPath(o.path)))
+  const excluded = new Set(outOfScope.map(o => normPath(o.path)))
+  return { ...base, inScope: files.filter(f => !excluded.has(f)), outOfScope }
 }
 
 // 文档与代码对照的四个合法结论。模型返回其它字符串时一律归为"无法判断"，不让不规范的输出混进统计。
@@ -454,14 +562,15 @@ const SYSTEM_ANALYSIS_SCHEMA = {
         required: ['subject', 'assumption', 'impactIfBroken', 'howToVerify', 'basis'],
       },
     },
-    inScope: { type: 'array', items: { type: 'string' }, description: '建议纳入审计的合约路径' },
+    // 不再让模型给 inScope：纳入范围由工作流按核实过的合约清单直接决定（applyScopeBoundary）
     outOfScope: {
       type: 'array',
+      description: '只能从给定的合约清单里挑：不需要审计的文件（纯接口、mock、测试替身等），清单之外的路径会被工作流丢弃',
       items: {
         type: 'object',
         properties: {
-          path: { type: 'string' },
-          reason: { type: 'string', description: '如第三方 vendored 代码、mocks、纯接口' },
+          path: { type: 'string', description: '必须与清单里的路径原样一致' },
+          reason: { type: 'string', description: '如纯接口无实现、测试用的 mock' },
         },
         required: ['path', 'reason'],
       },
@@ -623,6 +732,29 @@ const DOC_CHECK_SCHEMA = {
   required: ['checks'],
 }
 
+const PATH_CHECK_SCHEMA = {
+  type: 'object',
+  properties: {
+    entries: {
+      type: 'array',
+      description: '用户给出的每个路径一条，不得遗漏、不得新增',
+      items: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '用户给出的路径，原样照抄' },
+          kind: { type: 'string', description: 'contracts 或 docs' },
+          exists: { type: 'boolean', description: '实地查到存在才填 true' },
+          type: { type: 'string', description: 'file 或 directory' },
+          files: { type: 'array', items: { type: 'string' }, description: 'type=directory 时：该目录下（含子目录）的全部文件，仓库相对路径，按命令输出原样列出' },
+          reason: { type: 'string', description: 'exists=false 时填写真实原因' },
+        },
+        required: ['path', 'kind', 'exists'],
+      },
+    },
+  },
+  required: ['entries'],
+}
+
 const ARCHIVE_SCHEMA = {
   type: 'object',
   properties: {
@@ -655,22 +787,42 @@ function requirementsBlock(requirements) {
   return reqs.map(r => `- ${r.id}［${r.topic || '其他'}］${r.statement}（出处：${r.source}）`).join('\n')
 }
 
-function docCollectionPrompt(docPaths) {
-  const where = docPaths.length
-    ? `用户指定了以下文档，**只读这些**，逐个尝试读取：\n${docPaths.map(p => `- ${p}`).join('\n')}`
-    : `用户没有指定文档，请自动查找：用 bash（git ls-files / find）在 docs/、doc/、spec/、specs/、design/ 目录和仓库根目录下找需求、设计、白皮书类文档。
-常见命名：*PRD*、*需求*、*设计*、*spec*、*whitepaper*、*白皮书*、*architecture*，以及 README 里描述业务规则或架构的章节。
-排除：node_modules/、lib/、CHANGELOG、LICENSE、.audit/ 目录、纯安装说明类文档，以及第三方依赖自带的文档。`
+// 合约清单在多个提示词里共用的写法：明确"只看这些"，杜绝 agent 自行扩大范围
+function contractScopeBlock(contractFiles) {
+  return `本次审计范围（已由工作流核实存在）只包括以下合约文件，只分析这些，不要分析清单之外的合约：
+${scopeList(contractFiles).map(f => `- ${f}`).join('\n')}
+清单里的合约 import 了清单外的代码（库、接口、父合约）时，可以读它们来理解清单内合约的行为，但不要把清单外的合约当作分析对象写进结论。`
+}
 
-  return `收集本项目的业务文档，提取可以拿去和合约代码对照的业务要求。
+function pathCheckPrompt(contracts, docs) {
+  const list = (paths, kind) => paths.map(p => `- [${kind}] ${p}`).join('\n')
+  return `核实用户指定的审计范围路径是否真实存在，只报告事实，不做分析。
 
-${where}
+需要核实的路径：
+${list(contracts, 'contracts')}
+${list(docs, 'docs')}
+
+做法：
+1. 用 bash（git ls-files、ls、test -e）逐个检查。每个路径返回一条 entry，path 原样照抄，kind 照抄方括号里的值；不得遗漏，也不得新增用户没给的路径；
+2. 存在的填 exists=true，并填 type（file / directory）；不存在或无权限的填 exists=false，并在 reason 写真实原因；
+3. type=directory 时，把该目录下（含子目录）的全部文件列进 files，用仓库相对路径（如 \`git ls-files 目录\` 或 \`find 目录 -type f\` 的输出），不要筛选、不要补充目录外的文件；
+4. 只核实这些路径，不得读取文件内容，不要扫描其他目录。
+禁止根据路径名猜测是否存在，必须以命令输出为准。
+严格按 schema 返回。`
+}
+
+function docCollectionPrompt(docFiles) {
+  return `读取用户指定的业务文档，提取可以拿去和合约代码对照的业务要求。
+
+只读以下文档（已由工作流核实存在），逐个读取，不得读取清单之外的任何文件，也不要去仓库里找其他文档：
+${scopeList(docFiles).map(p => `- ${p}`).join('\n')}
+
+documents 里必须为上面每一份文档返回一条记录，path 原样照抄；任何一份没读到正文，工作流都会中止并提示用户处理。
 
 读取方法：
 - Markdown / TXT：直接读；
 - PDF：用 Read 工具读（超过 10 页时分批读 pages）；
-- Word（.docx）：先试 \`pandoc -t plain 文件\`，不行再试 \`unzip -p 文件 word/document.xml\` 并去掉 XML 标签；都失败就标 readable=false 并写明原因，建议用户导出成 PDF 或 Markdown；
-- 在线文档链接（飞书、Confluence、Notion 等）：无法访问，标 readable=false，原因写"在线文档无法直接读取，请导出为文件放入仓库"。
+- Word（.docx / .doc）：先试 \`pandoc -t plain 文件\`，不行再试 \`unzip -p 文件 word/document.xml\` 并去掉 XML 标签；都失败就标 readable=false 并写明原因，建议用户导出成 PDF 或 Markdown；
 - 没有真正读到正文的，一律 readable=false，禁止根据文件名猜内容。
 
 提取要求（requirements）：
@@ -683,12 +835,10 @@ ${DOC_SAFETY_NOTE}
 严格按 schema 返回。`
 }
 
-function systemAnalysisPrompt(targetContracts, requirements) {
-  const scope = targetContracts && targetContracts.length
-    ? `仅限于用户指定的文件：${targetContracts.join('、')}`
-    : `用 bash（git ls-files / find / ls）实地枚举 contracts/ 下的自研合约，排除 test/、script/、contracts/mocks/、contracts/interfaces/ 以及可判断为第三方 vendored/fork 的目录`
+function systemAnalysisPrompt(contractFiles, requirements) {
+  return `分析合约的资产、角色权限与信任假设，为后续 L2 语义审计建立上下文。
 
-  return `分析本仓库合约的资产、角色权限与信任假设，为后续 L2 语义审计建立上下文。${scope}
+${contractScopeBlock(contractFiles)}
 
 业务文档里提取出的要求（这是"业务意图"，代码是"实际行为"，两者都要参考）：
 ${requirementsBlock(requirements)}
@@ -707,7 +857,7 @@ ${requirementsBlock(requirements)}
    - needs-human：代码和文档都给不出答案，取决于部署与治理的真实情况。
    宁可多列 needs-human，也不要把猜测标成 code-inferred 或 doc-stated —— 这些假设会被喂给审计 AI 当作事实，标错会直接污染审计结论。
    文档说的和代码做的不一样时，不要在这里替它们调和，按代码的实际行为写假设，矛盾留给后面的"文档与代码对照"阶段处理；
-6. **审计边界**：给出 in scope 建议列表，以及 out of scope 及其原因（第三方 vendored 代码只查"我们怎么调用它"，不审源码本身）。
+6. **审计边界**：纳入范围由工作流按上面的清单决定，你不用给。只需在 outOfScope 里从清单中挑出不需要审计的文件（纯接口无实现、测试用 mock 等）并写明原因，path 与清单原样一致；清单里的都需要审就返回空数组。
 
 所有结论必须实地读源码得出，读不到的如实填"需人工确认"，禁止编造。
 ${PLAIN_LANGUAGE_RULE}
@@ -715,8 +865,10 @@ ${DOC_SAFETY_NOTE}
 严格按 schema 返回。`
 }
 
-function economicsPrompt(system, requirements) {
+function economicsPrompt(system, requirements, contractFiles) {
   return `分析本项目的经济模型与资金流转，作为审计范围文档的第 4 章。
+
+${contractScopeBlock(contractFiles)}
 
 已完成的系统分析（角色、资产、权限）：
 ${JSON.stringify(system, null, 2)}
@@ -736,11 +888,11 @@ ${PLAIN_LANGUAGE_RULE}
 严格按 schema 返回。`
 }
 
-function docCheckPrompt(requirements, system, economics, targetContracts) {
-  const scope = targetContracts && targetContracts.length
-    ? `只看用户指定的合约：${targetContracts.join('、')}`
-    : '看系统分析里列出的 in scope 合约'
-  return `把业务文档的要求逐条和合约代码对照，找出"文档说的"和"代码做的"不一致的地方。${scope}。
+function docCheckPrompt(requirements, system, economics, contractFiles) {
+  return `把业务文档的要求逐条和合约代码对照，找出"文档说的"和"代码做的"不一致的地方。
+
+${contractScopeBlock(contractFiles)}
+文档要求的功能在清单内的合约里找不到时，结论是"代码未实现"或"无法判断"（可能在清单外实现），在 note 里说明，不要自行去清单外找。
 
 需求条目：
 ${requirementsBlock(requirements)}
@@ -772,36 +924,57 @@ ${DOC_SAFETY_NOTE}
 phase('准备')
 log('开始生成审计范围与信任假设文档...')
 
-const targetContracts = args && args.contracts && args.contracts.length ? args.contracts : null
-log(targetContracts
-  ? `用户指定了 ${targetContracts.length} 个合约：${targetContracts.join('、')}`
-  : '未指定合约，将自动发现核心合约')
-const docPaths = normalizeDocArgs(args && args.docs)
-log(docPaths.length
-  ? `用户指定了 ${docPaths.length} 份业务文档：${docPaths.join('、')}`
-  : '未指定业务文档，将在 docs/、spec/、design/ 等目录和仓库根目录自动查找')
+// 第一道检查（纯代码，不调模型）：合约与文档都必须显式指定，不做任何自动扫描
+const scopeArgs = checkScopeArgs(args)
+if (!scopeArgs.ok) {
+  log(`❌ 未指定审计范围，工作流中止：\n- ${scopeArgs.errors.join('\n- ')}\n\n${scopeArgs.usage}`)
+  return { error: '未指定审计范围', errors: scopeArgs.errors, usage: scopeArgs.usage }
+}
+log(`用户指定合约：${scopeArgs.contracts.join('、')}`)
+log(`用户指定文档：${scopeArgs.docs.join('、')}`)
+
+// 第二道检查：agent 只报告文件系统事实，放不放行由代码对账决定
+const pathCheck = await agent(pathCheckPrompt(scopeArgs.contracts, scopeArgs.docs), {
+  phase: '准备',
+  schema: PATH_CHECK_SCHEMA,
+  label: '核实审计范围路径',
+})
+const scopePaths = reconcileScopePaths({ contracts: scopeArgs.contracts, docs: scopeArgs.docs }, pathCheck)
+if (!scopePaths.ok) {
+  log(`❌ 审计范围路径无效，工作流中止：\n- ${scopePaths.errors.join('\n- ')}\n\n请修正路径后重新运行。`)
+  return { error: '审计范围路径无效', errors: scopePaths.errors }
+}
+const contractFiles = scopePaths.contractFiles
+const docFiles = scopePaths.docFiles
+log(`核实完成：${contractFiles.length} 个合约文件、${docFiles.length} 份文档`)
 
 phase('文档收集')
-const docs = await agent(docCollectionPrompt(docPaths), {
+const docs = await agent(docCollectionPrompt(docFiles), {
   phase: '文档收集',
   schema: DOCS_SCHEMA,
   label: '收集业务文档并提取需求',
 })
-const documents = scopeList(docs && docs.documents)
-const unreadableDocs = documents.filter(d => d.readable === false)
+// 指定的文档必须全部读到正文，否则业务意图残缺，范围文档会误导后续审计
+const unreadableDocs = findUnreadableDocs(docFiles, docs)
+if (unreadableDocs.length) {
+  const errors = unreadableDocs.map(d => `「${d.path}」未能读取（${d.reason}）`)
+  log(`❌ 业务文档无法读取，工作流中止：\n- ${errors.join('\n- ')}\n\n请把文档转成 Markdown / TXT / PDF 后重新运行，或从 docs 参数中移除它。`)
+  return { error: '业务文档无法读取', errors }
+}
 const requirements = scopeList(docs && docs.requirements).filter(r => typeof r.id === 'string' && r.id.trim())
-log(`读到 ${documents.length - unreadableDocs.length} 份文档，提取 ${requirements.length} 条可对照的业务要求`)
-if (unreadableDocs.length) log(`⚠️ 有 ${unreadableDocs.length} 份文档未能读取：${unreadableDocs.map(d => `${d.path}（${d.reason || '原因未知'}）`).join('；')}`)
+log(`读到 ${docFiles.length} 份文档，提取 ${requirements.length} 条可对照的业务要求`)
 if (docs && docs.omittedNote) log(`⚠️ 文档未逐条提取完：${docs.omittedNote}`)
-if (!requirements.length) log('⚠️ 没有提取到业务要求：后续分析只能从代码推断业务意图，第 6 章「文档与代码对照」将为空')
+if (!requirements.length) log('⚠️ 文档里没有提取到可对照的业务要求：后续分析只能从代码推断业务意图，第 6 章「文档与代码对照」将为空')
 
 phase('系统与角色分析')
-const system = await agent(systemAnalysisPrompt(targetContracts, requirements), {
+const systemRaw = await agent(systemAnalysisPrompt(contractFiles, requirements), {
   phase: '系统与角色分析',
   schema: SYSTEM_ANALYSIS_SCHEMA,
   label: '分析资产、角色与信任假设',
   effort: 'high',
 })
+// 审计边界由代码按核实清单决定，模型给的范围外路径一律丢弃
+const system = applyScopeBoundary(systemRaw, contractFiles)
 
 const assumptionCount = (system && Array.isArray(system.trustAssumptions) ? system.trustAssumptions : []).length
 log(`识别到 ${(system && system.assets || []).length} 项核心资产、${(system && system.roles || []).length} 个角色、${assumptionCount} 条信任假设`)
@@ -809,7 +982,7 @@ log(`识别到 ${(system && system.assets || []).length} 项核心资产、${(sy
 if (assumptionCount > 15) log(`⚠️ 信任假设有 ${assumptionCount} 条，超过建议上限 15 条，人工核对负担较重，可考虑重新生成或手动合并同类项`)
 
 phase('经济模型与资金流')
-const economics = await agent(economicsPrompt(system, requirements), {
+const economics = await agent(economicsPrompt(system, requirements, contractFiles), {
   phase: '经济模型与资金流',
   schema: ECONOMICS_SCHEMA,
   label: '分析经济模型与资金流',
@@ -821,7 +994,7 @@ log(`识别到 ${(economics && economics.fundsIn || []).length} 个资金流入�
 phase('文档与代码对照')
 let docCheckRaw = null
 if (requirements.length) {
-  docCheckRaw = await agent(docCheckPrompt(requirements, system, economics, targetContracts), {
+  docCheckRaw = await agent(docCheckPrompt(requirements, system, economics, contractFiles), {
     phase: '文档与代码对照',
     schema: DOC_CHECK_SCHEMA,
     label: '逐条对照文档与代码',

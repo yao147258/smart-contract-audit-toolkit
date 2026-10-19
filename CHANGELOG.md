@@ -6,11 +6,13 @@
 
 ### ⚠️ Breaking Changes
 
+- **`generate-scope-template` 必须显式指定审计范围，不再自动扫描仓库。** `args.contracts` 与 `args.docs` 均为必填（数组或逗号/换行分隔字符串，每项可以是文件或目录；`normalizeDocArgs` 更名为 `normalizePathArgs`）。「准备」阶段新增三道检查，任一不过即早退、不产出文档：① 纯函数 `checkScopeArgs` 检查入参，缺任何一项、整仓（`.`）、通配符、仓库外路径、在线链接、非 `.sol` 合约文件均返回 `{ error: '未指定审计范围', errors, usage }`，不启动任何 agent；② 新增路径核实 agent（只报告文件系统事实）+ 纯函数 `reconcileScopePaths` 对账，路径不存在、agent 漏报、目录内没有 `.sol` / 可读文档时返回 `{ error: '审计范围路径无效', errors }`，目录展开结果只保留确实位于该目录下的合法文件；③ 文档收集后由 `findUnreadableDocs` 检查，任何一份指定文档未读到正文即返回 `{ error: '业务文档无法读取', errors }`。所有分析提示词只针对核实过的合约清单；第 5 章「纳入审计」改由纯函数 `applyScopeBoundary` 按清单直接生成（模型只能从清单中标出排除项），不再由模型给建议。原有的自动查找文档、自动枚举 `contracts/` 分支全部移除。
+
 - **`smart-contract-audit-pipeline` 新增硬前置：没有经人工签字的 `.audit/scope.md` 就无法启动。** 流水线在「准备」阶段、L1 之前执行门禁 `evaluateScopeGate(context)`（纯函数，不调大模型），三条硬性条件任一不满足即早退，返回 `{ error: '审计范围文档未就绪', scopeGate }`：① `.audit/scope.md` 存在且可读；② 第 3 章「信任假设」没有剩余的「⬜ 待人工确认」；③ 文末签字栏的确认人与确认日期都非空。**没有任何参数可以绕过**（不提供 `skipScopeCheck` 之类的开关），且为 fail-closed：上下文 agent 返回空值或结构异常时一律判为不通过。早退时的日志会逐条列出卡在哪几条未确认假设。
 
   **老用户升级后的迁移动作**（三步，缺一不可）：
 
-  1. 跑 `/smart-contract-audit-toolkit:generate-scope-template` 生成 `.audit/scope.md`（无需任何外部工具）；
+  1. 跑 `/smart-contract-audit-toolkit:generate-scope-template`，指定要审计的合约与业务文档，生成 `.audit/scope.md`（无需任何外部工具）；
   2. 人工打开该文件，**逐条**核对第 3 章的信任假设，成立的把状态列从 `⬜ 待人工确认` 改成 `✅ 已确认`（必须是这两个完整字符串，变体不识别），并填写文末「人工签字」栏的确认人与确认日期；
   3. 再跑 `smart-contract-audit-pipeline`。
 

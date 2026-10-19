@@ -23,7 +23,7 @@
 所以标准使用顺序是三步：
 
 ```
-1. /smart-contract-audit-toolkit:generate-scope-template   ← AI 生成初稿
+1. /smart-contract-audit-toolkit:generate-scope-template 合约 contracts/Vault.sol 文档 docs/PRD.md   ← AI 生成初稿（合约和文档都必须指定）
 2. 人工打开 .audit/scope.md 逐条签字                        ← 这一步 AI 不代做
 3. /smart-contract-audit-toolkit:smart-contract-audit-pipeline
 ```
@@ -108,14 +108,9 @@ pip install halmos
 ## 用法示例
 
 ```
-/smart-contract-audit-toolkit:generate-scope-template
-（自动发现本仓库核心合约，分析资产/角色权限/信任假设/资金流，生成 .audit/scope.md）
-
-/smart-contract-audit-toolkit:generate-scope-template contracts/Vault.sol,contracts/Token.sol
-（仅对指定合约做范围分析）
-
-/smart-contract-audit-toolkit:generate-scope-template 业务文档在 docs/需求说明.pdf 和 spec/fee-design.md
-（指定业务文档；不指定时自动在 docs/、spec/、design/ 等目录查找，并把文档要求和代码逐条对照）
+/smart-contract-audit-toolkit:generate-scope-template 合约 contracts/Vault.sol,contracts/core/ 文档 docs/需求说明.pdf,spec/
+（合约和业务文档都必须指定，可以是文件或目录；等价于 args: { contracts: [...], docs: [...] }。
+ 不会自行扫描仓库：缺任何一项、路径不存在、目录里没有 .sol / 可读文档、文档读不到正文，都会直接中止并说明原因）
 
 /smart-contract-audit-toolkit:generate-invariants-template
 （自动发现本仓库核心合约，识别不变量，生成 .audit/invariants.md）
@@ -154,7 +149,7 @@ formal-verification-halmos
 
 ### 审计范围文档
 
-`generate-scope-template` 会先读取需求/设计类业务文档（支持 Markdown、TXT、PDF，Word 会尝试转换；在线文档需先导出），再生成 `.audit/scope.md`，六章 + 一个签字栏：
+`generate-scope-template` 只处理你显式指定的合约与业务文档（文件或目录），先读取指定的需求/设计文档（支持 Markdown、TXT、PDF，Word 会尝试转换；在线文档需先导出成文件），再生成 `.audit/scope.md`，六章 + 一个签字栏：
 
 1. 系统概述与核心资产
 2. 角色与权限矩阵（角色表 + 「角色 × 可调用的特权函数」矩阵）
