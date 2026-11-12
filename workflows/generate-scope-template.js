@@ -222,22 +222,40 @@ function extractMarkdownSectionRows(content, headingPattern) {
 // 读取已有 .audit/scope.md（若存在）后，判断它是否已经完成人工签字。
 // 只关心"是否已签字"，不关心信任假设是否全部确认——那是 pipeline 门禁的事；
 // 这里只用于决定本轮要不要覆盖这份文件。
+//
+// 修复（最终整体审查发现的 Critical 问题）：unreadable 字段区分"确认文件真的不存在"
+// 和"读取结果不可信"——agent() 调用失败返回 null、exists 字段类型不对、exists=true
+// 但 content 是空的（自相矛盾）、或签字表解析不出来（文档结构被破坏/被截断），这些情况
+// 都不能被当成"没签字"，必须交给 decideScopeWriteTarget 当"有需要保护的内容"处理。
+// 签字表恰好在文档最末尾，而 scope.md 篇幅可能很长，模型长文本输出被截断时最先丢的
+// 就是末尾内容——这正是本次要防的场景，所以"解析不出来"绝不能等同于"确认没签字"。
 /*@export*/ function extractExistingSignoff(raw) {
   const source = raw || {}
-  if (source.exists !== true || typeof source.content !== 'string' || !source.content.trim()) {
-    return { confirmedBy: '', confirmedAt: '' }
+  if (source.exists !== true) {
+    // exists 严格等于布尔 false，才是 agent 实地确认"文件不存在"这一可信的事实；
+    // 其余情况（undefined、null、非布尔值，包括 agent() 整体失败返回 null 后 source 变成 {}）
+    // 都代表"读取结果本身不可信"，不能当成"文件不存在"。
+    return { confirmedBy: '', confirmedAt: '', unreadable: source.exists !== false }
+  }
+  if (typeof source.content !== 'string' || !source.content.trim()) {
+    // exists===true 却没有内容，自相矛盾，同样不可信
+    return { confirmedBy: '', confirmedAt: '', unreadable: true }
   }
   const rows = extractMarkdownSectionRows(source.content, /##\s*人工签字([\s\S]*?)(?=\n##\s|\n---|$)/)
+  if (!rows) {
+    // 签字表解析不出来：文档结构被破坏或内容被截断，不能当成"没签字"
+    return { confirmedBy: '', confirmedAt: '', unreadable: true }
+  }
   const isPlaceholder = v => !v || v === '（待填写）' || v === '(待填写)'
   let confirmedBy = ''
   let confirmedAt = ''
-  ;(rows || []).forEach(cells => {
+  rows.forEach(cells => {
     const key = cells[0] || ''
     const value = cells[1] || ''
     if (key === '确认人' && !isPlaceholder(value)) confirmedBy = value
     if (key === '确认日期' && !isPlaceholder(value)) confirmedAt = value
   })
-  return { confirmedBy, confirmedAt }
+  return { confirmedBy, confirmedAt, unreadable: false }
 }
 
 // 提取已有文档第 3 章「信任假设」里每一行的"主体：假设"，不区分状态列（已确认/待确认都收进来），
@@ -248,6 +266,16 @@ function extractMarkdownSectionRows(content, headingPattern) {
   const rows = extractMarkdownSectionRows(source.content, /##\s*3\.\s*信任假设([\s\S]*?)(?=\n##\s|\n---|$)/)
   if (!rows || rows.length < 2) return []
   return rows.slice(1).map(cells => `${cells[0] || ''}：${cells[1] || ''}`)
+}
+
+// 第 3 章里只要有任意一行状态列已经是「✅ 已确认」，就说明人工已经在逐条核对甚至核对完了——
+// 即使文末签字栏还没填（可能正签到一半），也要当作"有需要保护的进度"，不能被覆盖。
+/*@export*/ function hasAnyConfirmedAssumption(raw) {
+  const source = raw || {}
+  if (source.exists !== true || typeof source.content !== 'string' || !source.content.trim()) return false
+  const rows = extractMarkdownSectionRows(source.content, /##\s*3\.\s*信任假设([\s\S]*?)(?=\n##\s|\n---|$)/)
+  if (!rows || rows.length < 2) return false
+  return rows.slice(1).some(cells => (cells[cells.length - 1] || '') === CONFIRMED_MARK)
 }
 
 // 把本轮新分析出的信任假设（结构化数据）转换成和 extractExistingAssumptionPairs 一样的
@@ -268,15 +296,19 @@ function extractMarkdownSectionRows(content, headingPattern) {
   return { added, removed, unchangedCount }
 }
 
-// 决定本轮文档落盘到哪个路径：
-// - 原文件不存在，或存在但未签字（确认人/确认日期任一为空）→ 正常覆盖 .audit/scope.md；
-// - 原文件已签字，且调用方没有显式传 forceOverwrite:true → 写入 .audit/scope.md.draft 草稿，不动原文件；
-// - 原文件已签字，调用方显式传 forceOverwrite:true → 仍然覆盖 .audit/scope.md，但标记 overwroteSignedDoc:true，
-//   供调用方在日志/返回值里如实提示"这次是故意覆盖掉已签字内容的"。
-/*@export*/ function decideScopeWriteTarget(existingSignoff, forceOverwrite) {
+// 决定本轮文档落盘到哪个路径。三种情况都要保护、不能直接覆盖：
+// ①原文件已完整签字（确认人与确认日期都填了）；
+// ②读取结果不可信（existingSignoff.unreadable===true：agent 读取失败，或文档结构被破坏/被截断，
+//   解析不出签字表）——"读不出来"绝不能被当成"确认没签字"，否则这道保护形同虚设；
+// ③签字栏还没填完，但第 3 章里已经有任意一条假设被标成「✅ 已确认」（hasConfirmedAssumption）——
+//   说明人工正在逐条核对，哪怕没签到最后一步，覆盖也会连带冲掉这部分进度。
+// 只有三者都不成立（原文件确认不存在，或确认存在但确认是"一条都没确认、签字栏也是空的"）才正常覆盖。
+// 调用方没有显式传 forceOverwrite:true 时，有保护内容就写草稿（.audit/scope.md.draft），不动原文件；
+// 显式传 forceOverwrite:true 时仍然覆盖，但标记 overwroteSignedDoc:true，供调用方在日志里如实提示。
+/*@export*/ function decideScopeWriteTarget(existingSignoff, forceOverwrite, hasConfirmedAssumption) {
   const signoff = existingSignoff || {}
-  const hasSignoff = !!(signoff.confirmedBy && signoff.confirmedAt)
-  if (!hasSignoff) return { path: SCOPE_PATH, isDraft: false, overwroteSignedDoc: false }
+  const hasProtectableContent = !!(signoff.confirmedBy && signoff.confirmedAt) || signoff.unreadable === true || !!hasConfirmedAssumption
+  if (!hasProtectableContent) return { path: SCOPE_PATH, isDraft: false, overwroteSignedDoc: false }
   if (forceOverwrite === true) return { path: SCOPE_PATH, isDraft: false, overwroteSignedDoc: true }
   return { path: SCOPE_DRAFT_PATH, isDraft: true, overwroteSignedDoc: false }
 }
@@ -1040,10 +1072,10 @@ if (!scopeArgs.ok) {
 log(`用户指定合约：${scopeArgs.contracts.join('、')}`)
 log(`用户指定文档：${scopeArgs.docs.join('、')}`)
 
-// 幂等保护：如果 .audit/scope.md 已经完成人工签字，本轮默认不覆盖它——
-// 签字是人工成本最高的一步，被静默冲掉比"门禁严格"造成的损失更大。
-// 这里只做一次机械的"原样读取"，判断"是否已签字"不应该由 agent 自己理解和总结，
-// 要靠正则直接读表格（见 extractExistingSignoff）。
+// 幂等保护：如果 .audit/scope.md 已经有需要保护的内容（已签字、读取结果不可信、或已有部分
+// 确认进度），本轮默认不覆盖它——签字/核对是人工成本最高的一步，被静默冲掉比"门禁严格"
+// 造成的损失更大。这里只做一次机械的"原样读取"，判断逻辑交给纯函数（见 extractExistingSignoff /
+// hasAnyConfirmedAssumption / decideScopeWriteTarget 的注释）。
 const existingScope = await agent(existingScopePrompt(), {
   phase: '准备',
   schema: EXISTING_SCOPE_SCHEMA,
@@ -1051,12 +1083,15 @@ const existingScope = await agent(existingScopePrompt(), {
 })
 const existingSignoff = extractExistingSignoff(existingScope)
 const existingAssumptionPairs = extractExistingAssumptionPairs(existingScope)
+const existingHasConfirmedAssumption = hasAnyConfirmedAssumption(existingScope)
 const forceOverwrite = !!(args && args.forceOverwrite === true)
-if (existingSignoff.confirmedBy && existingSignoff.confirmedAt) {
-  if (forceOverwrite) {
-    log(`⚠️ 检测到 ${SCOPE_PATH} 已由人工签字（确认人：${existingSignoff.confirmedBy}，确认日期：${existingSignoff.confirmedAt}），但本次显式传入了 forceOverwrite:true，将覆盖原文件，已签字内容会丢失。`)
+const writeTarget = decideScopeWriteTarget(existingSignoff, forceOverwrite, existingHasConfirmedAssumption)
+if (writeTarget.isDraft || writeTarget.overwroteSignedDoc) {
+  const signoffDesc = `确认人：${existingSignoff.confirmedBy || '未填写'}，确认日期：${existingSignoff.confirmedAt || '未填写'}`
+  if (writeTarget.overwroteSignedDoc) {
+    log(`⚠️ 检测到 ${SCOPE_PATH} 可能已有人工签字或核对进度，或本次未能可靠读取其内容（${signoffDesc}），但本次显式传入了 forceOverwrite:true，将覆盖原文件，已有进度会丢失。`)
   } else {
-    log(`⚠️ 检测到 ${SCOPE_PATH} 已由人工签字（确认人：${existingSignoff.confirmedBy}，确认日期：${existingSignoff.confirmedAt}）。本轮不会覆盖原文件，新结果会写入 ${SCOPE_DRAFT_PATH} 供人工比对；如确认要重新生成并覆盖，调用时传入 args.forceOverwrite: true。`)
+    log(`⚠️ 检测到 ${SCOPE_PATH} 可能已有人工签字或核对进度，或本次未能可靠读取其内容（${signoffDesc}）。本轮不会覆盖原文件，新结果会写入 ${SCOPE_DRAFT_PATH} 供人工比对；如确认要重新生成并覆盖，调用时传入 args.forceOverwrite: true。`)
   }
 }
 
@@ -1140,7 +1175,6 @@ if (requirements.length) {
 
 phase('文档生成与保存')
 
-const writeTarget = decideScopeWriteTarget(existingSignoff, forceOverwrite)
 const draftChanges = summarizeScopeDraftChanges(existingAssumptionPairs, trustAssumptionPairs(system.trustAssumptions))
 
 // 归档整块做异常隔离：这段代码位于"最后一次有价值的计算完成"和 return 之间，
@@ -1177,7 +1211,7 @@ if (archive.status !== 'Written') {
 } else if (writeTarget.isDraft) {
   log(`✅ 草稿已生成：${SCOPE_DRAFT_PATH}（原文件 ${SCOPE_PATH} 未被改动）。信任假设较上次变化：新增 ${draftChanges.added.length} 条、移除 ${draftChanges.removed.length} 条，请人工比对后决定是否手动合并。`)
 } else {
-  log(`✅ 审计范围文档已生成：${SCOPE_PATH}（${assumptionCount} 条信任假设，全部为待人工确认）`)
+  log(`✅ 审计范围文档已生成：${writeTarget.path}（${assumptionCount} 条信任假设，全部为待人工确认）`)
   if (writeTarget.overwroteSignedDoc) log('⚠️ 本次按 forceOverwrite:true 覆盖了已签字的原文件，原有签字记录已丢失。')
   log(`⚠️ 下一步必须人工完成，pipeline 才会放行：逐条把状态改成「${CONFIRMED_MARK}」，并填写文末签字栏的确认人与确认日期。`)
 }

@@ -485,7 +485,7 @@ test('buildAuditSummaryMarkdown 渲染 unprovenCriticalCount 并在人工复核�
   })
 
   assert.match(markdown, /\| unprovenCriticalCount \| 1 \|/)
-  assert.match(markdown, /contracts\/Vault\.sol：有 1 条 Critical\/High 发现只有 Suspected（迭代耗尽仍无法证明）的 PoC 证据，门禁判定为未通过，需人工复核/)
+  assert.match(markdown, /contracts\/Vault\.sol：有 1 条 Critical\/High 发现没有已确认（Confirmed）的 PoC 证据（可能是 Suspected、PoC 验证失败，或跳过了 L3），门禁判定为未通过，需人工复核/)
 })
 
 test('buildAuditSummaryMarkdown：unprovenCriticalCount 为 0 时不在人工复核事项里出现相关条目', () => {
@@ -501,5 +501,5 @@ test('buildAuditSummaryMarkdown：unprovenCriticalCount 为 0 时不在人工复
     }],
     global: { overview: '无阻断项', readyForDelivery: true },
   })
-  assert.doesNotMatch(markdown, /只有 Suspected/)
+  assert.doesNotMatch(markdown, /没有已确认（Confirmed）的 PoC 证据/)
 })

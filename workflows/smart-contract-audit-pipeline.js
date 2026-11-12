@@ -145,6 +145,11 @@ function markdownCell(value) {
     .filter(cells => cells.length > 0 && !cells.every(c => /^:?-+:?$/.test(c)))
 }
 
+// 已知局限（有意记录，不是本次要解决的范围）：如果 rawScopePrompt 的 agent 返回的 content
+// 不是"完全读不到"或"被截断"，而是"看起来完整，但中间漏掉了第 3 章里的几行"（比如漏抄了
+// 某几条仍是「⬜ 待人工确认」的行），parseScopeDocument 对此无感——它只能按收到的文本做正则匹配，
+// 判断不出"文本本身是否完整"。这种情况下门禁可能误判为通过。缓解需要额外的交叉校验（如让
+// agent 顺带报告字符数或待确认标记的计数，由代码核对），本次不实现，先记录在这里。
 /*@export*/ function parseScopeDocument(raw) {
   const source = raw || {}
   const exists = source.exists === true
@@ -456,8 +461,10 @@ function renderL2TraceSections(l2Trace) {
     )
     // 门禁未通过的直接原因之一：Critical/High 发现只有 Suspected（迭代耗尽仍无法证明）的 PoC，
     // 不是"没有问题"，必须人工看一眼
+    // 文案不能只说"只有 Suspected"：PoC 根本没跑（skipL3=true）或 PoC agent 失败被丢弃
+    // 也会让这个计数 >0，用"没有已确认的 PoC 证据"涵盖全部原因，不说错事实
     const unprovenItems = gate.unprovenCriticalCount > 0
-      ? [`有 ${gate.unprovenCriticalCount} 条 Critical/High 发现只有 Suspected（迭代耗尽仍无法证明）的 PoC 证据，门禁判定为未通过，需人工复核`]
+      ? [`有 ${gate.unprovenCriticalCount} 条 Critical/High 发现没有已确认（Confirmed）的 PoC 证据（可能是 Suspected、PoC 验证失败，或跳过了 L3），门禁判定为未通过，需人工复核`]
       : []
     return [
       ...failedItems.map(item => `${result.target || '未提供'}：${item}`),
@@ -963,7 +970,7 @@ L1 全局数据：highCount=${l1.highCount}, mediumCount=${l1.mediumCount}, gate
 
 任务：
 1. overview：用几句话概述本轮审计整体风险状况；
-2. readyForDelivery：只有当"L1 High 清零"且"每条 Critical/High 都有 PoC 结论或书面闭环"时才为 true，否则 false（这只是给人的参考信号，不是自动放行）；
+2. readyForDelivery：只有当"L1 High 清零"且"每个合约的 gate.gatePass 都为 true"时才为 true，否则 false（gate.gatePass 是代码算好的门禁结果，直接读取即可，不需要你重新判断"有没有 PoC 结论"——Suspected 状态的 PoC 不算通过；这只是给人的参考信号，不是自动放行）；
 3. blockingItems：列出阻止交付业务测试的具体条目（对应哪个合约、哪条发现）；
 4. perTargetGate：每个合约的 gate.gatePass 汇总列表。
 
@@ -1047,11 +1054,11 @@ async function l4Stage(l3Out, target) {
 // 主流程
 // ===========================================================================
 phase('准备')
-const context = await agent(contextPrompt(), { schema: CONTEXT_SCHEMA, label: '加载审计上下文' })
 
-// 范围文档门禁：硬前置，没有参数可以绕过。
-// 门禁判断改为基于 rawScopePrompt 取回的原始文本，由 parseScopeDocument 纯函数用正则直接判断
-// （理由见该函数定义处的注释）。context 仍然保留，只用它的 scopeSummary/summary 做 L2 的上下文摘要。
+// 范围文档门禁：硬前置，没有参数可以绕过。先做这道便宜的检查（只读一次文件、纯函数判断），
+// 不通过就早退——不要在早退之前，白白跑一次更贵的上下文加载（下面的 contextPrompt 要读多个
+// 文件、生成一段摘要）。门禁判断基于 rawScopePrompt 取回的原始文本，由 parseScopeDocument
+// 纯函数用正则直接判断（理由见该函数定义处的注释）。
 const rawScope = await agent(rawScopePrompt(), { schema: RAW_SCOPE_SCHEMA, label: '读取scope.md原始内容' })
 const parsedScope = parseScopeDocument(rawScope)
 const scopeGate = evaluateScopeGate(parsedScope)
@@ -1061,6 +1068,9 @@ if (!scopeGate.pass) {
   return { error: '审计范围文档未就绪', scopeGate }
 }
 log(`✅ 审计范围文档已就绪（确认人：${parsedScope.scopeConfirmedBy}，确认日期：${parsedScope.scopeConfirmedAt}）`)
+
+// context 只用它的 scopeSummary/summary 做 L2 的上下文摘要，门禁判断不再依赖它。
+const context = await agent(contextPrompt(), { schema: CONTEXT_SCHEMA, label: '加载审计上下文' })
 
 let targets = args && args.targets && args.targets.length ? args.targets : null
 if (!targets) {

@@ -29,6 +29,7 @@ const {
   buildScopeMarkdown, SCOPE_PATH, SCOPE_DRAFT_PATH, scopeArchivePrompt, normalizePathArgs, reconcileRequirementChecks, DOC_CHECK_STATUSES,
   checkScopeArgs, reconcileScopePaths, findUnreadableDocs, applyScopeBoundary,
   extractExistingSignoff, extractExistingAssumptionPairs, trustAssumptionPairs, summarizeScopeDraftChanges, decideScopeWriteTarget,
+  hasAnyConfirmedAssumption,
 } = helpers
 
 const fullInput = () => ({
@@ -510,18 +511,31 @@ const signedScopeMarkdown = `# 审计范围与信任假设
 `
 
 test('extractExistingSignoff：已签字的文档能提取确认人与确认日期，未签字/不存在返回空', () => {
-  assert.deepEqual(extractExistingSignoff({ exists: true, content: signedScopeMarkdown }), { confirmedBy: '张三', confirmedAt: '2026-09-01' })
-  assert.deepEqual(extractExistingSignoff({ exists: false, content: '' }), { confirmedBy: '', confirmedAt: '' })
+  assert.deepEqual(extractExistingSignoff({ exists: true, content: signedScopeMarkdown }), { confirmedBy: '张三', confirmedAt: '2026-09-01', unreadable: false })
+  assert.deepEqual(extractExistingSignoff({ exists: false, content: '' }), { confirmedBy: '', confirmedAt: '', unreadable: false })
   assert.deepEqual(
     extractExistingSignoff({ exists: true, content: signedScopeMarkdown.replace('张三', '（待填写）').replace('2026-09-01', '（待填写）') }),
-    { confirmedBy: '', confirmedAt: '' }
+    { confirmedBy: '', confirmedAt: '', unreadable: false }
   )
-  assert.deepEqual(extractExistingSignoff(null), { confirmedBy: '', confirmedAt: '' })
+  // agent 整体失败返回 null：不能当成"文件不存在"，必须标记 unreadable
+  assert.deepEqual(extractExistingSignoff(null), { confirmedBy: '', confirmedAt: '', unreadable: true })
+  // exists===true 但 content 为空：自相矛盾，同样标记 unreadable
+  assert.deepEqual(extractExistingSignoff({ exists: true, content: '' }), { confirmedBy: '', confirmedAt: '', unreadable: true })
+  // exists===true、content 非空，但签字表解析不出来（结构被破坏/被截断）：标记 unreadable
+  assert.deepEqual(extractExistingSignoff({ exists: true, content: '# 文档\n\n## 3. 信任假设\n\n占位\n' }), { confirmedBy: '', confirmedAt: '', unreadable: true })
 })
 
 test('extractExistingAssumptionPairs：提取第 3 章每一行"主体：假设"，不存在时返回空数组', () => {
   assert.deepEqual(extractExistingAssumptionPairs({ exists: true, content: signedScopeMarkdown }), ['owner：假定不作恶'])
   assert.deepEqual(extractExistingAssumptionPairs({ exists: false, content: '' }), [])
+})
+
+test('hasAnyConfirmedAssumption：第 3 章里只要有任意一行已确认就返回 true', () => {
+  assert.equal(hasAnyConfirmedAssumption({ exists: true, content: signedScopeMarkdown }), true)
+  const unsignedMarkdown = signedScopeMarkdown.replace('✅ 已确认', '⬜ 待人工确认').replace('张三', '（待填写）').replace('2026-09-01', '（待填写）')
+  assert.equal(hasAnyConfirmedAssumption({ exists: true, content: unsignedMarkdown }), false)
+  assert.equal(hasAnyConfirmedAssumption({ exists: false, content: '' }), false)
+  assert.equal(hasAnyConfirmedAssumption(null), false)
 })
 
 test('trustAssumptionPairs：把结构化信任假设转换成与 extractExistingAssumptionPairs 一致的字符串格式', () => {
@@ -549,6 +563,17 @@ test('decideScopeWriteTarget：未签字或不存在时正常覆盖；已签字�
   assert.equal(SCOPE_DRAFT_PATH, '.audit/scope.md.draft')
 })
 
+test('decideScopeWriteTarget：读取不可信或已有部分确认进度时，即使签字栏为空也要写草稿而不是覆盖', () => {
+  // 读取失败/解析不出来：不能当成"没签字"
+  assert.deepEqual(decideScopeWriteTarget({ confirmedBy: '', confirmedAt: '', unreadable: true }, false), { path: SCOPE_DRAFT_PATH, isDraft: true, overwroteSignedDoc: false })
+  // 读取不可信 + forceOverwrite：人工主动确认要覆盖，允许
+  assert.deepEqual(decideScopeWriteTarget({ confirmedBy: '', confirmedAt: '', unreadable: true }, true), { path: SCOPE_PATH, isDraft: false, overwroteSignedDoc: true })
+  // 签字栏还没填完，但已经有至少一条假设被标成已确认：说明人工在核对中，也要保护
+  assert.deepEqual(decideScopeWriteTarget({ confirmedBy: '', confirmedAt: '' }, false, true), { path: SCOPE_DRAFT_PATH, isDraft: true, overwroteSignedDoc: false })
+  // 真的没有任何进度：第三参数为 false 时行为不变
+  assert.deepEqual(decideScopeWriteTarget({ confirmedBy: '', confirmedAt: '' }, false, false), { path: SCOPE_PATH, isDraft: false, overwroteSignedDoc: false })
+})
+
 test('scopeArchivePrompt：可指定落盘目标路径，用于草稿场景', () => {
   const prompt = scopeArchivePrompt('# 内容', SCOPE_DRAFT_PATH)
   assert.match(prompt, /\.audit\/scope\.md\.draft/)
@@ -564,7 +589,7 @@ test('主流程：读取已有文档判断签字状态，并据此决定落盘�
   const argCheck = main.indexOf('checkScopeArgs(args)')
   const existingCheck = main.indexOf('existingScopePrompt()')
   assert.ok(argCheck > -1 && existingCheck > -1 && argCheck < existingCheck, '入参检查必须早于读取已有文档')
-  assert.match(workflowSource, /const writeTarget = decideScopeWriteTarget\(existingSignoff, forceOverwrite\)/)
+  assert.match(workflowSource, /const writeTarget = decideScopeWriteTarget\(existingSignoff, forceOverwrite, existingHasConfirmedAssumption\)/)
   assert.match(workflowSource, /const draftChanges = summarizeScopeDraftChanges\(existingAssumptionPairs, trustAssumptionPairs\(system\.trustAssumptions\)\)/)
   assert.match(workflowSource, /scopeArchivePrompt\(markdown, writeTarget\.path\)/)
   const returnBlock = workflowSource.slice(workflowSource.lastIndexOf('return {'))
