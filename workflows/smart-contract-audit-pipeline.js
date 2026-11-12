@@ -459,8 +459,6 @@ function renderL2TraceSections(l2Trace) {
     const unaccountedItems = traces.flatMap(trace =>
       (Array.isArray(trace.unaccounted) ? trace.unaccounted : []).map(title => `L2 专项「${trace.label}」的候选发现「${title}」去向未登记（裁判输出里找不到同名条目），请核对是被改名还是被漏判`)
     )
-    // 门禁未通过的直接原因之一：Critical/High 发现只有 Suspected（迭代耗尽仍无法证明）的 PoC，
-    // 不是"没有问题"，必须人工看一眼
     // 文案不能只说"只有 Suspected"：PoC 根本没跑（skipL3=true）或 PoC agent 失败被丢弃
     // 也会让这个计数 >0，用"没有已确认的 PoC 证据"涵盖全部原因，不说错事实
     const unprovenItems = gate.unprovenCriticalCount > 0
