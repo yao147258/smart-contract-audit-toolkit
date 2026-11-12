@@ -844,6 +844,15 @@ const PATH_CHECK_SCHEMA = {
   required: ['entries'],
 }
 
+const EXISTING_SCOPE_SCHEMA = {
+  type: 'object',
+  properties: {
+    exists: { type: 'boolean', description: `${SCOPE_PATH} 是否真实存在。用 Read/cat 实地确认，不存在就填 false，禁止推测` },
+    content: { type: 'string', description: `${SCOPE_PATH} 的完整原始内容，一字不改地返回；exists=false 时填空字符串` },
+  },
+  required: ['exists', 'content'],
+}
+
 const ARCHIVE_SCHEMA = {
   type: 'object',
   properties: {
@@ -881,6 +890,15 @@ function contractScopeBlock(contractFiles) {
   return `本次审计范围（已由工作流核实存在）只包括以下合约文件，只分析这些，不要分析清单之外的合约：
 ${scopeList(contractFiles).map(f => `- ${f}`).join('\n')}
 清单里的合约 import 了清单外的代码（库、接口、父合约）时，可以读它们来理解清单内合约的行为，但不要把清单外的合约当作分析对象写进结论。`
+}
+
+function existingScopePrompt() {
+  return `这是一次纯粹的文件读取任务，不要做任何总结、判断或概括。
+检查仓库内 ${SCOPE_PATH} 是否存在：
+- 存在：exists=true，content 填文件的完整原始文本（完整返回，不省略、不改写）；
+- 不存在：exists=false，content 填空字符串。
+不要解读文档内容，也不要判断"是否已经签字"，那是另一步的工作。
+严格按 schema 返回 JSON。`
 }
 
 function pathCheckPrompt(contracts, docs) {
@@ -1022,6 +1040,26 @@ if (!scopeArgs.ok) {
 log(`用户指定合约：${scopeArgs.contracts.join('、')}`)
 log(`用户指定文档：${scopeArgs.docs.join('、')}`)
 
+// 幂等保护：如果 .audit/scope.md 已经完成人工签字，本轮默认不覆盖它——
+// 签字是人工成本最高的一步，被静默冲掉比"门禁严格"造成的损失更大。
+// 这里只做一次机械的"原样读取"，判断"是否已签字"不应该由 agent 自己理解和总结，
+// 要靠正则直接读表格（见 extractExistingSignoff）。
+const existingScope = await agent(existingScopePrompt(), {
+  phase: '准备',
+  schema: EXISTING_SCOPE_SCHEMA,
+  label: '检查已有审计范围文档',
+})
+const existingSignoff = extractExistingSignoff(existingScope)
+const existingAssumptionPairs = extractExistingAssumptionPairs(existingScope)
+const forceOverwrite = !!(args && args.forceOverwrite === true)
+if (existingSignoff.confirmedBy && existingSignoff.confirmedAt) {
+  if (forceOverwrite) {
+    log(`⚠️ 检测到 ${SCOPE_PATH} 已由人工签字（确认人：${existingSignoff.confirmedBy}，确认日期：${existingSignoff.confirmedAt}），但本次显式传入了 forceOverwrite:true，将覆盖原文件，已签字内容会丢失。`)
+  } else {
+    log(`⚠️ 检测到 ${SCOPE_PATH} 已由人工签字（确认人：${existingSignoff.confirmedBy}，确认日期：${existingSignoff.confirmedAt}）。本轮不会覆盖原文件，新结果会写入 ${SCOPE_DRAFT_PATH} 供人工比对；如确认要重新生成并覆盖，调用时传入 args.forceOverwrite: true。`)
+  }
+}
+
 // 第二道检查：agent 只报告文件系统事实，放不放行由代码对账决定
 const pathCheck = await agent(pathCheckPrompt(scopeArgs.contracts, scopeArgs.docs), {
   phase: '准备',
@@ -1102,39 +1140,45 @@ if (requirements.length) {
 
 phase('文档生成与保存')
 
+const writeTarget = decideScopeWriteTarget(existingSignoff, forceOverwrite)
+const draftChanges = summarizeScopeDraftChanges(existingAssumptionPairs, trustAssumptionPairs(system.trustAssumptions))
+
 // 归档整块做异常隔离：这段代码位于"最后一次有价值的计算完成"和 return 之间，
 // 一旦抛异常就会把 system / economics 这一整轮分析成果全部吞掉。
-let archive = { status: 'Failed', path: SCOPE_PATH, error: '归档未执行' }
+let archive = { status: 'Failed', path: writeTarget.path, error: '归档未执行' }
 let markdown = ''
 try {
   markdown = buildScopeMarkdown({ system, economics, docs, docCheck })
   log(`生成文档内容：${markdown.length} 字符`)
 
-  const archived = await agent(scopeArchivePrompt(markdown), {
+  const archived = await agent(scopeArchivePrompt(markdown, writeTarget.path), {
     phase: '文档生成与保存',
     schema: ARCHIVE_SCHEMA,
-    label: '写入审计范围文档',
+    label: writeTarget.isDraft ? '写入审计范围文档草稿' : '写入审计范围文档',
   })
   if (archived) archive = archived
 
   // 纯代码校验：路径必须与权威常量一致，模型写错路径却报成功时要能被发现
-  if (archive.path !== SCOPE_PATH) {
-    archive = { status: 'Failed', path: SCOPE_PATH, error: `写入路径与预期不符：${archive.path}` }
+  if (archive.path !== writeTarget.path) {
+    archive = { status: 'Failed', path: writeTarget.path, error: `写入路径与预期不符：${archive.path}` }
   } else if (archive.status === 'Written' && typeof archive.writtenLength === 'number') {
     // 廉价的长度核对：拦住"被概括/截断"这一类最常见的失效
     const diff = Math.abs(archive.writtenLength - markdown.length)
     if (diff > Math.max(64, Math.round(markdown.length * 0.02))) {
-      archive = { status: 'Failed', path: SCOPE_PATH, error: `写入长度与预期不符（预期 ${markdown.length}，实际 ${archive.writtenLength}），疑似被概括或截断` }
+      archive = { status: 'Failed', path: writeTarget.path, error: `写入长度与预期不符（预期 ${markdown.length}，实际 ${archive.writtenLength}），疑似被概括或截断` }
     }
   }
 } catch (err) {
-  archive = { status: 'Failed', path: SCOPE_PATH, error: `文档生成或写入异常：${(err && err.message) || String(err)}` }
+  archive = { status: 'Failed', path: writeTarget.path, error: `文档生成或写入异常：${(err && err.message) || String(err)}` }
 }
 
 if (archive.status !== 'Written') {
   log(`⚠️ 审计范围文档写入失败：${archive.error || '归档 agent 未返回成功状态'}`)
+} else if (writeTarget.isDraft) {
+  log(`✅ 草稿已生成：${SCOPE_DRAFT_PATH}（原文件 ${SCOPE_PATH} 未被改动）。信任假设较上次变化：新增 ${draftChanges.added.length} 条、移除 ${draftChanges.removed.length} 条，请人工比对后决定是否手动合并。`)
 } else {
   log(`✅ 审计范围文档已生成：${SCOPE_PATH}（${assumptionCount} 条信任假设，全部为待人工确认）`)
+  if (writeTarget.overwroteSignedDoc) log('⚠️ 本次按 forceOverwrite:true 覆盖了已签字的原文件，原有签字记录已丢失。')
   log(`⚠️ 下一步必须人工完成，pipeline 才会放行：逐条把状态改成「${CONFIRMED_MARK}」，并填写文末签字栏的确认人与确认日期。`)
 }
 
@@ -1144,5 +1188,7 @@ return {
   docs,
   docCheck,
   pendingAssumptionCount: assumptionCount,
+  writeTarget,
+  draftChanges,
   archive,
 }
