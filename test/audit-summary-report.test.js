@@ -41,7 +41,7 @@ const extractPureHelpers = () => {
 const helpers = extractPureHelpers()
 const {
   REPORT_STAGE_NAMES, normalizeReportMetadata, buildAuditSummaryMarkdown, archivePrompt,
-  L2_ROLES, promptFingerprint, reconcileJudgeOutput, buildCategoryTrace, checkArchiveResult, TRACE_ARCHIVE_PATH,
+  L2_ROLES, promptFingerprint, reconcileJudgeOutput, buildCategoryTrace, checkArchiveResult, TRACE_ARCHIVE_PATH, computeGates,
 } = helpers
 
 // 取某个 stage 函数的函数体文本（函数的收尾 `}` 在第 0 列，内部的 `}` 均有缩进）
@@ -430,4 +430,42 @@ test('上下文加载读取 scope.md 第 6 章，业务逻辑专项逐条处理�
   assert.match(context.slice(0, context.indexOf('\n}\n')), /第 6 章「文档与代码对照」/)
   const auditor = workflowSource.slice(workflowSource.indexOf('function auditorPrompt('))
   assert.match(auditor.slice(0, auditor.indexOf('\n}\n')), /cat\.key === 'business-logic'[\s\S]*?文档与代码不一致要点/)
+})
+
+test('computeGates：全部 Critical/High 都有 Confirmed 的 PoC 时门禁通过', () => {
+  const gate = computeGates(
+    { highCount: 0 },
+    [{ title: 'A', status: 'Confirmed', severity: 'Critical' }, { title: 'B', status: 'NeedsPoC', severity: 'High' }],
+    [{ findingTitle: 'A', status: 'Confirmed' }, { findingTitle: 'B', status: 'Confirmed' }]
+  )
+  assert.equal(gate.gatePass, true)
+  assert.equal(gate.evidenceComplete, true)
+  assert.equal(gate.unprovenCriticalCount, 0)
+})
+
+test('computeGates：PoC 状态为 Suspected 时不计入证据完整，门禁不通过且计入 unprovenCriticalCount', () => {
+  const gate = computeGates(
+    { highCount: 0 },
+    [{ title: 'A', status: 'Confirmed', severity: 'Critical' }],
+    [{ findingTitle: 'A', status: 'Suspected' }]
+  )
+  assert.equal(gate.evidenceComplete, false)
+  assert.equal(gate.unprovenCriticalCount, 1)
+  assert.equal(gate.gatePass, false)
+})
+
+test('computeGates：没有对应 PoC 记录时同样判定证据不完整，pocResults 为空值不抛异常', () => {
+  const gate = computeGates({ highCount: 0 }, [{ title: 'A', status: 'Confirmed', severity: 'Critical' }], [])
+  assert.equal(gate.evidenceComplete, false)
+  assert.equal(gate.unprovenCriticalCount, 1)
+  assert.equal(gate.gatePass, false)
+
+  assert.doesNotThrow(() => computeGates({ highCount: 0 }, [{ title: 'A', status: 'Confirmed', severity: 'Critical' }], null))
+  assert.doesNotThrow(() => computeGates(null, null, null))
+})
+
+test('computeGates：l1 highCount 非零时门禁不通过，即使证据齐备', () => {
+  const gate = computeGates({ highCount: 1 }, [], [])
+  assert.equal(gate.l1HighZero, false)
+  assert.equal(gate.gatePass, false)
 })

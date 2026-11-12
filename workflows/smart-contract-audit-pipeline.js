@@ -510,6 +510,28 @@ ${ARCHIVE_CONTENT_FENCE}
 ${markdown}
 ${ARCHIVE_CONTENT_FENCE}`
 }
+
+// 纯函数：门禁判定（不调用大模型，避免让 AI 给自己打分）。
+// evidenceComplete 要求 PoC 的 status 必须是 Confirmed——Suspected 代表"5 轮迭代仍无法证明"，
+// 不能被当成"有证据"。Suspected 的 Critical/High 发现单独计入 unprovenCriticalCount，
+// 由 buildAuditSummaryMarkdown 强制写进「人工复核事项」，不依赖 L4 agent 记得提。
+/*@export*/ function computeGates(l1, confirmedFindings, pocResults) {
+  const l1HighZero = ((l1 && l1.highCount) || 0) === 0
+  const criticalHigh = (confirmedFindings || []).filter(
+    f => f && (f.status === 'Confirmed' || f.status === 'NeedsPoC') && (f.severity === 'Critical' || f.severity === 'High')
+  )
+  const pocs = Array.isArray(pocResults) ? pocResults.filter(Boolean) : []
+  const hasConfirmedPoc = f => pocs.some(p => p.findingTitle === f.title && p.status === 'Confirmed')
+  const evidenceComplete = criticalHigh.every(hasConfirmedPoc)
+  const unprovenCriticalCount = criticalHigh.filter(f => !hasConfirmedPoc(f)).length
+  return {
+    l1HighZero,
+    criticalHighCount: criticalHigh.length,
+    evidenceComplete,
+    unprovenCriticalCount,
+    gatePass: l1HighZero && evidenceComplete,
+  }
+}
 // ==== END AUDIT SUMMARY REPORT PURE HELPERS ====
 
 // 每次只审一个专项、禁止跨类报告，用以降低单次扫描的误报率）
@@ -941,22 +963,6 @@ ${PLAIN_LANGUAGE_RULE}
 严格按 schema 返回 JSON。`
 }
 
-// ---------------------------------------------------------------------------
-// 纯函数：门禁判定（不调用大模型，避免让 AI 给自己打分）
-// ---------------------------------------------------------------------------
-function computeGates(l1, confirmedFindings, pocResults) {
-  const l1HighZero = (l1.highCount || 0) === 0
-  const criticalHigh = (confirmedFindings || []).filter(
-    f => (f.status === 'Confirmed' || f.status === 'NeedsPoC') && (f.severity === 'Critical' || f.severity === 'High')
-  )
-  const evidenceComplete = criticalHigh.every(f => (pocResults || []).some(p => p.findingTitle === f.title))
-  return {
-    l1HighZero,
-    criticalHighCount: criticalHigh.length,
-    evidenceComplete,
-    gatePass: l1HighZero && evidenceComplete,
-  }
-}
 
 // ---------------------------------------------------------------------------
 // L2 单目标：四角色对抗 × 多专项类别（专项之间用 pipeline，无阻塞并行推进）
