@@ -307,23 +307,52 @@ function booleanValue(value) {
   return value === true ? '是' : value === false ? '否' : '未提供'
 }
 
+// 一个专项是否"异常"：status 不是「完成」，或候选数不等于「确认 + 拒绝」（即存在去向未登记）。
+// 正常专项只在摘要里占一行；异常专项才展开完整表格（含提示词指纹），避免正常情况也要看一遍全部细节。
+function isTraceAnomalous(trace) {
+  const count = value => (Array.isArray(value) ? value.length : 0)
+  const settledCount = count(trace.confirmedFindings) + count(trace.rejectedFindings)
+  return trace.status !== '完成' || count(trace.candidateFindings) !== settledCount
+}
+
 // 渲染单个合约的 L2 留痕小节。没有轨迹数据（旧数据/上游未传）时整段不输出，避免满屏"无"。
 function renderL2TraceSections(l2Trace) {
   const traces = Array.isArray(l2Trace) ? l2Trace.filter(Boolean) : []
   if (!traces.length) return []
+  const count = value => (Array.isArray(value) ? value.length : 0)
+  const anomalous = traces.filter(isTraceAnomalous)
+
   const lines = [
     '',
     '#### L2 专项执行轨迹',
-    '> 每个专项的候选发现数应等于"确认 + 拒绝"。"去向未登记"不为 0，说明有发现在裁判环节没有明确结论，需要人工核对。',
+    '> 每个专项的候选发现数应等于"确认 + 拒绝"；正常专项只列一行摘要，标 ⚠️ 的专项详情见下方表格。',
     '',
-    '| 专项 | 状态 | 候选 | 有攻击路径 | 补丁 | 确认 | 拒绝 | 去向未登记 | 提示词指纹（审计员/攻击者/修复/裁判） |',
-    '|---|---|---|---|---|---|---|---|---|',
     ...traces.map(trace => {
-      const fp = trace.promptFingerprints || {}
-      const fingerprints = L2_ROLES.map(role => fp[role.key] || '-').join(' / ')
-      const count = value => (Array.isArray(value) ? value.length : 0)
-      return `| ${markdownCell(trace.label)} | ${markdownCell(trace.status)} | ${count(trace.candidateFindings)} | ${count(trace.attackPaths)} | ${count(trace.patches)} | ${count(trace.confirmedFindings)} | ${count(trace.rejectedFindings)} | ${count(trace.unaccounted)} | ${markdownCell(fingerprints)} |`
+      const candidateCount = count(trace.candidateFindings)
+      const confirmedCount = count(trace.confirmedFindings)
+      const rejectedCount = count(trace.rejectedFindings)
+      if (isTraceAnomalous(trace)) {
+        const reason = trace.status !== '完成' ? trace.status : '候选数与「确认+拒绝」不一致，有发现去向未登记'
+        return `- ${markdownCell(trace.label)}：⚠️ ${markdownCell(reason)}，详见下表`
+      }
+      return `- ${markdownCell(trace.label)}：候选 ${candidateCount}，确认 ${confirmedCount}，拒绝 ${rejectedCount}，一致 ✅`
     }),
+  ]
+
+  if (anomalous.length) {
+    lines.push(
+      '',
+      '| 专项 | 状态 | 候选 | 有攻击路径 | 补丁 | 确认 | 拒绝 | 去向未登记 | 提示词指纹（审计员/攻击者/修复/裁判） |',
+      '|---|---|---|---|---|---|---|---|---|',
+      ...anomalous.map(trace => {
+        const fp = trace.promptFingerprints || {}
+        const fingerprints = L2_ROLES.map(role => fp[role.key] || '-').join(' / ')
+        return `| ${markdownCell(trace.label)} | ${markdownCell(trace.status)} | ${count(trace.candidateFindings)} | ${count(trace.attackPaths)} | ${count(trace.patches)} | ${count(trace.confirmedFindings)} | ${count(trace.rejectedFindings)} | ${count(trace.unaccounted)} | ${markdownCell(fingerprints)} |`
+      })
+    )
+  }
+
+  lines.push(
     '',
     '#### 规格重建（AI 认为这个合约"应该保证什么"，建议优先核对）',
     '> 如果这里的理解和业务意图不一致，该专项后面的结论都要打折扣。',
@@ -331,14 +360,17 @@ function renderL2TraceSections(l2Trace) {
     '| 专项 | AI 重建的规格 |',
     '|---|---|',
     ...traces.map(trace => `| ${markdownCell(trace.label)} | ${markdownCell(trace.rebuiltSpec)} |`),
-  ]
+  )
 
+  // 全部专项都没有被拒绝的发现时，整节不输出（与下面"去向未登记"的处理方式一致），避免一堆"无 | 无 | 无"占位行。
   const rejected = traces.flatMap(trace =>
     (Array.isArray(trace.rejectedFindings) ? trace.rejectedFindings : []).filter(Boolean).map(item => ({ label: trace.label, ...item }))
   )
-  lines.push('', '#### 被裁判拒绝的发现', '> 这些发现没有进入正式结果。建议每轮随机抽查约 10%，抽到误杀说明裁判偏严。', '',
-    '| 专项 | 标题 | 拒绝理由 |', '|---|---|---|',
-    ...(rejected.length ? rejected.map(item => `| ${markdownCell(item.label)} | ${markdownCell(item.title)} | ${markdownCell(item.reason)} |`) : ['| 无 | 无 | 无 |']))
+  if (rejected.length) {
+    lines.push('', '#### 被裁判拒绝的发现', '> 这些发现没有进入正式结果。建议每轮随机抽查约 10%，抽到误杀说明裁判偏严。', '',
+      '| 专项 | 标题 | 拒绝理由 |', '|---|---|---|',
+      ...rejected.map(item => `| ${markdownCell(item.label)} | ${markdownCell(item.title)} | ${markdownCell(item.reason)} |`))
+  }
 
   const unaccounted = traces.flatMap(trace =>
     (Array.isArray(trace.unaccounted) ? trace.unaccounted : []).map(title => ({ label: trace.label, title }))
@@ -360,32 +392,41 @@ function renderL2TraceSections(l2Trace) {
   const perTarget = Array.isArray(input.perTarget) ? input.perTarget.filter(Boolean) : []
   const global = input.global || {}
   const scope = input.scope || {}
+
+  // 人工复核事项要提前到报告最前面，所以先算好。只收集真实存在的条目：
+  // 空集合的合约不再输出"合约名：无"这种占位噪音行；只有当全部合约一条都没有时，才输出单个"无"。
+  const humanItems = perTarget.flatMap(result => {
+    const report = result.report || {}
+    const gate = result.gate || {}
+    const openItems = Array.isArray(report.openItemsForHuman) ? report.openItemsForHuman.filter(Boolean) : []
+    const fpItems = Array.isArray(report.suggestedFalsePositiveEntries) ? report.suggestedFalsePositiveEntries.filter(Boolean) : []
+    // L2 留痕暴露出来的问题由代码直接生成复核项，不依赖 L4 agent 记得提
+    const traces = Array.isArray(result.l2Trace) ? result.l2Trace.filter(Boolean) : []
+    const failedItems = traces
+      .filter(trace => trace.status && trace.status !== '完成')
+      .map(trace => `L2 专项「${trace.label}」${trace.status}，该专项没有结论，不等于"没有问题"`)
+    const unaccountedItems = traces.flatMap(trace =>
+      (Array.isArray(trace.unaccounted) ? trace.unaccounted : []).map(title => `L2 专项「${trace.label}」的候选发现「${title}」去向未登记（裁判输出里找不到同名条目），请核对是被改名还是被漏判`)
+    )
+    // 文案不能只说"只有 Suspected"：PoC 根本没跑（skipL3=true）或 PoC agent 失败被丢弃
+    // 也会让这个计数 >0，用"没有已确认的 PoC 证据"涵盖全部原因，不说错事实
+    const unprovenItems = gate.unprovenCriticalCount > 0
+      ? [`有 ${gate.unprovenCriticalCount} 条 Critical/High 发现没有已确认（Confirmed）的 PoC 证据（可能是 Suspected、PoC 验证失败，或跳过了 L3），门禁判定为未通过，需人工复核`]
+      : []
+    return [
+      ...failedItems.map(item => `${result.target || '未提供'}：${item}`),
+      ...unaccountedItems.map(item => `${result.target || '未提供'}：${item}`),
+      ...unprovenItems.map(item => `${result.target || '未提供'}：${item}`),
+      ...openItems.map(item => `${result.target || '未提供'}：${item}`),
+      ...fpItems.map(item => `${result.target || '未提供'}：建议误报条目：${item}`),
+    ]
+  })
+
+  // 章节顺序：结论/复核事项（决策者最需要）→ 逐合约细节 → L1 原始扫描 → 运行信息（元信息/耗时，追溯用）→ 免责声明
   const lines = [
     '# 智能合约审计总报告',
     '',
     '> 本报告由内部 AI 审计流水线生成，用于人工复核；不是最终放行结论。',
-    '',
-    '## 审查元信息',
-    '| 元信息 | 值 |',
-    '|---|---|',
-    `| 审查开始时间 | ${markdownCell(metadata.startedAt)} |`,
-    `| 审查结束时间 | ${markdownCell(metadata.endedAt)} |`,
-    `| 总耗时 | ${markdownCell(metadata.totalDuration)} |`,
-    `| 审查模型 | ${markdownCell(metadata.model)} |`,
-    `| 审查人 | ${markdownCell(metadata.reviewer)} |`,
-    `| 审计范围 | ${targets.length ? targets.map(target => '`' + markdownCell(target) + '`').join('、') : '无'} |`,
-    `| 审计范围文档 | \`${SCOPE_PATH}\`（确认人：${markdownCell(scope.confirmedBy)}，确认日期：${markdownCell(scope.confirmedAt)}） |`,
-    `| L2 专项 | ${categories.length ? categories.map(category => {
-      const key = typeof category === 'string' ? category : category.key
-      const label = typeof category === 'string' ? category : category.label
-      return `${markdownCell(label || key)}（${markdownCell(key)}）`
-    }).join('、') : '无'} |`,
-    `| L3 PoC | ${input.skipL3 ? '已跳过' : '已执行'} |`,
-    '',
-    '## 各阶段执行耗时',
-    '| 阶段 | 开始时间 | 结束时间 | 耗时 | 状态 |',
-    '|---|---|---|---|---|',
-    ...metadata.stages.map(stage => `| ${markdownCell(stage.name)} | ${markdownCell(stage.startedAt)} | ${markdownCell(stage.endedAt)} | ${markdownCell(stage.duration)} | ${markdownCell(stage.status)} |`),
     '',
     '## 全局结论与门禁',
     `- 总览：${markdownCell(global.overview)}`,
@@ -404,18 +445,8 @@ function renderL2TraceSections(l2Trace) {
       ? global.perTargetGate.map(item => `| ${markdownCell(item.target)} | ${booleanValue(item.gatePass)} |`)
       : ['| 无 | 未提供 |']),
     '',
-    '## L1 静态扫描',
-    `- 工具：${l1.toolsAvailable && l1.toolsAvailable.length ? l1.toolsAvailable.map(markdownCell).join('、') : '无'}`,
-    `- High：${markdownCell(l1.highCount)}`,
-    `- Medium：${markdownCell(l1.mediumCount)}`,
-    `- Low：${markdownCell(l1.lowCount)}`,
-    '',
-    '| 文件 | 严重度 | 工具 | 标题 | 描述 | 位置 |',
-    '|---|---|---|---|---|---|',
-    // .filter(Boolean)：l1 是 LLM 直接产出，schema 不是硬保证，数组里混入 null 元素会让整轮审计在最后一步崩掉
-    ...(Array.isArray(l1.findings) && l1.findings.filter(Boolean).length
-      ? l1.findings.filter(Boolean).map(finding => `| ${markdownCell(finding.file)} | ${markdownCell(finding.severity)} | ${markdownCell(finding.tool)} | ${markdownCell(finding.title)} | ${markdownCell(finding.description)} | ${markdownCell(finding.location)} |`)
-      : ['| 无 | 无 | 无 | 无 | 无 | 无 |']),
+    '## 人工复核事项',
+    ...(humanItems.length ? humanItems.map(item => `- ${markdownCell(item)}`) : ['无']),
     '',
     '## 逐合约审计结果',
   ]
@@ -443,36 +474,46 @@ function renderL2TraceSections(l2Trace) {
     })
   }
 
-  lines.push('', '## 人工复核事项')
-  // 只收集真实存在的条目：空集合的合约不再输出"合约名：无"这种占位噪音行；
-  // 只有当全部合约一条都没有时，才输出单个"无"。
-  const humanItems = perTarget.flatMap(result => {
-    const report = result.report || {}
-    const gate = result.gate || {}
-    const openItems = Array.isArray(report.openItemsForHuman) ? report.openItemsForHuman.filter(Boolean) : []
-    const fpItems = Array.isArray(report.suggestedFalsePositiveEntries) ? report.suggestedFalsePositiveEntries.filter(Boolean) : []
-    // L2 留痕暴露出来的问题由代码直接生成复核项，不依赖 L4 agent 记得提
-    const traces = Array.isArray(result.l2Trace) ? result.l2Trace.filter(Boolean) : []
-    const failedItems = traces
-      .filter(trace => trace.status && trace.status !== '完成')
-      .map(trace => `L2 专项「${trace.label}」${trace.status}，该专项没有结论，不等于"没有问题"`)
-    const unaccountedItems = traces.flatMap(trace =>
-      (Array.isArray(trace.unaccounted) ? trace.unaccounted : []).map(title => `L2 专项「${trace.label}」的候选发现「${title}」去向未登记（裁判输出里找不到同名条目），请核对是被改名还是被漏判`)
-    )
-    // 文案不能只说"只有 Suspected"：PoC 根本没跑（skipL3=true）或 PoC agent 失败被丢弃
-    // 也会让这个计数 >0，用"没有已确认的 PoC 证据"涵盖全部原因，不说错事实
-    const unprovenItems = gate.unprovenCriticalCount > 0
-      ? [`有 ${gate.unprovenCriticalCount} 条 Critical/High 发现没有已确认（Confirmed）的 PoC 证据（可能是 Suspected、PoC 验证失败，或跳过了 L3），门禁判定为未通过，需人工复核`]
-      : []
-    return [
-      ...failedItems.map(item => `${result.target || '未提供'}：${item}`),
-      ...unaccountedItems.map(item => `${result.target || '未提供'}：${item}`),
-      ...unprovenItems.map(item => `${result.target || '未提供'}：${item}`),
-      ...openItems.map(item => `${result.target || '未提供'}：${item}`),
-      ...fpItems.map(item => `${result.target || '未提供'}：建议误报条目：${item}`),
-    ]
-  })
-  lines.push(...(humanItems.length ? humanItems.map(item => `- ${markdownCell(item)}`) : ['无']))
+  lines.push(
+    '',
+    '## L1 静态扫描',
+    `- 工具：${l1.toolsAvailable && l1.toolsAvailable.length ? l1.toolsAvailable.map(markdownCell).join('、') : '无'}`,
+    `- High：${markdownCell(l1.highCount)}`,
+    `- Medium：${markdownCell(l1.mediumCount)}`,
+    `- Low：${markdownCell(l1.lowCount)}`,
+    '',
+    '| 文件 | 严重度 | 工具 | 标题 | 描述 | 位置 |',
+    '|---|---|---|---|---|---|',
+    // .filter(Boolean)：l1 是 LLM 直接产出，schema 不是硬保证，数组里混入 null 元素会让整轮审计在最后一步崩掉
+    ...(Array.isArray(l1.findings) && l1.findings.filter(Boolean).length
+      ? l1.findings.filter(Boolean).map(finding => `| ${markdownCell(finding.file)} | ${markdownCell(finding.severity)} | ${markdownCell(finding.tool)} | ${markdownCell(finding.title)} | ${markdownCell(finding.description)} | ${markdownCell(finding.location)} |`)
+      : ['| 无 | 无 | 无 | 无 | 无 | 无 |']),
+  )
+
+  lines.push(
+    '',
+    '## 运行信息',
+    '| 项 | 值 |',
+    '|---|---|',
+    `| 审查开始时间 | ${markdownCell(metadata.startedAt)} |`,
+    `| 审查结束时间 | ${markdownCell(metadata.endedAt)} |`,
+    `| 总耗时 | ${markdownCell(metadata.totalDuration)} |`,
+    `| 审查模型 | ${markdownCell(metadata.model)} |`,
+    `| 审查人 | ${markdownCell(metadata.reviewer)} |`,
+    `| 审计范围 | ${targets.length ? targets.map(target => '`' + markdownCell(target) + '`').join('、') : '无'} |`,
+    `| 审计范围文档 | \`${SCOPE_PATH}\`（确认人：${markdownCell(scope.confirmedBy)}，确认日期：${markdownCell(scope.confirmedAt)}） |`,
+    `| L2 专项 | ${categories.length ? categories.map(category => {
+      const key = typeof category === 'string' ? category : category.key
+      const label = typeof category === 'string' ? category : category.label
+      return `${markdownCell(label || key)}（${markdownCell(key)}）`
+    }).join('、') : '无'} |`,
+    `| L3 PoC | ${input.skipL3 ? '已跳过' : '已执行'} |`,
+    '',
+    '### 各阶段执行耗时',
+    '| 阶段 | 开始时间 | 结束时间 | 耗时 | 状态 |',
+    '|---|---|---|---|---|',
+    ...metadata.stages.map(stage => `| ${markdownCell(stage.name)} | ${markdownCell(stage.startedAt)} | ${markdownCell(stage.endedAt)} | ${markdownCell(stage.duration)} | ${markdownCell(stage.status)} |`),
+  )
 
   lines.push('', '## 免责声明', '', '本报告仅汇总自动化审计流水线的观测结果、候选发现、PoC 证据和 L4 人工复核事项。AI 不代替人工签字，不直接写入误报库、豁免库或回归目录；本报告不是最终放行结论。')
   return lines.join('\n')

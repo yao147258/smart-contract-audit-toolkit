@@ -400,6 +400,74 @@ test('没有 L2 轨迹数据时不输出轨迹小节', () => {
   assert.doesNotMatch(markdown, /L2 专项执行轨迹|被裁判拒绝的发现/)
 })
 
+test('L2 专项执行轨迹：正常专项只输出一行摘要，不展开完整表格/指纹', () => {
+  const markdown = buildAuditSummaryMarkdown({
+    perTarget: [{
+      target: 'contracts/Vault.sol',
+      gate: {},
+      report: { summary: 'ok' },
+      l2Trace: [{
+        category: 'reentrancy', label: '重入攻击', status: '完成',
+        promptFingerprints: { auditor: 'aaaa0001', attacker: 'bbbb0002', fixer: 'cccc0003', judge: 'dddd0004' },
+        rebuiltSpec: '提现前必须先扣余额',
+        candidateFindings: [{ title: 'F1' }, { title: 'F2' }],
+        attackPaths: [{}], patches: [{}],
+        confirmedFindings: [{ title: 'F1' }],
+        rejectedFindings: [{ title: 'F2', reason: '已加 nonReentrant' }],
+        unaccounted: [],
+      }],
+    }],
+    global: {},
+  })
+
+  // 正常（候选数 = 确认 + 拒绝，状态为完成）：只有一行摘要，不出现指纹和完整表格行
+  assert.match(markdown, /- 重入攻击：候选 2，确认 1，拒绝 1，一致 ✅/)
+  assert.doesNotMatch(markdown, /aaaa0001/)
+  assert.doesNotMatch(markdown, /\| 重入攻击 \| 完成 \| 2 \|/)
+  // 规格重建不受影响，始终展示
+  assert.match(markdown, /#### 规格重建/)
+  assert.match(markdown, /提现前必须先扣余额/)
+})
+
+test('被裁判拒绝的发现：全部专项都没有拒绝记录时，整节不输出', () => {
+  const markdown = buildAuditSummaryMarkdown({
+    perTarget: [{
+      target: 'contracts/Vault.sol',
+      gate: {},
+      report: { summary: 'ok' },
+      l2Trace: [{
+        category: 'reentrancy', label: '重入攻击', status: '完成',
+        promptFingerprints: {}, rebuiltSpec: 'x',
+        candidateFindings: [{ title: 'F1' }],
+        attackPaths: [], patches: [],
+        confirmedFindings: [{ title: 'F1' }],
+        rejectedFindings: [],
+        unaccounted: [],
+      }],
+    }],
+    global: {},
+  })
+  assert.doesNotMatch(markdown, /被裁判拒绝的发现/)
+})
+
+test('报告章节顺序：全局结论与门禁、人工复核事项提前到逐合约审计结果之前，运行信息挪到靠后位置', () => {
+  const markdown = buildAuditSummaryMarkdown({
+    metadata: { stages: [{ name: 'L1 静态扫描', duration: '30s', status: '完成' }] },
+    perTarget: [{ target: 'contracts/A.sol', gate: {}, report: { summary: 'ok' } }],
+    global: { overview: '无阻断项' },
+  })
+  const idxGate = markdown.indexOf('## 全局结论与门禁')
+  const idxHuman = markdown.indexOf('## 人工复核事项')
+  const idxPerTarget = markdown.indexOf('## 逐合约审计结果')
+  const idxRunInfo = markdown.indexOf('## 运行信息')
+  const idxDisclaimer = markdown.indexOf('## 免责声明')
+  assert.ok(idxGate !== -1 && idxHuman !== -1 && idxPerTarget !== -1 && idxRunInfo !== -1 && idxDisclaimer !== -1)
+  assert.ok(idxGate < idxHuman, '全局结论与门禁应在人工复核事项之前')
+  assert.ok(idxHuman < idxPerTarget, '人工复核事项应在逐合约审计结果之前')
+  assert.ok(idxPerTarget < idxRunInfo, '逐合约审计结果应在运行信息之前')
+  assert.ok(idxRunInfo < idxDisclaimer, '运行信息应在免责声明之前')
+})
+
 test('面向人的提示词都附带大白话表达规范，裁判要求对账与 plainExplanation', () => {
   const names = ['l1Prompt', 'auditorPrompt', 'attackerPrompt', 'fixerPrompt', 'judgePrompt', 'pocPrompt', 'reportPrompt', 'globalSynthesisPrompt']
   for (const name of names) {

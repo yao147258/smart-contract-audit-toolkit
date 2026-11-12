@@ -45,6 +45,7 @@
 - 工作流总数由四个增加到五个。推荐的完整顺序：`generate-scope-template` →（人工签字）→ `generate-invariants-template` → `smart-contract-audit-pipeline` → `invariant-fuzz-campaign` → `formal-verification-halmos`。
 - 文档同步更新：`README.md`、`skills/audit-toolkit-guide/SKILL.md`、`docs/workflow-details.md`（新增 `## 0. generate-scope-template`，原 0/1/2/3 四节顺延为 1/2/3/4）。
 - `meta.phases` 中两个阶段标题更名：`L3 PoC复现` → `L3 PoC 复现`，`L4 复核清单` → `L4 复核与归档`（阶段标题会展示在 UI 上）。
+- 审计总报告 `.audit/reports/audit-latest.md` 精简结构，减少阅读负担：① 章节顺序改为"先结论、细节按需展开"——「全局结论与门禁」「人工复核事项」提到报告最前面，「审查元信息」与「各阶段执行耗时」合并成「运行信息」一节挪到接近末尾；② 每个合约的「L2 专项执行轨迹」改为按异常展开——状态为「完成」且候选数等于「确认+拒绝」的正常专项只显示一行摘要（如`重入攻击：候选 3，确认 2，拒绝 1，一致 ✅`），只有状态异常或有去向未登记的专项才展开含提示词指纹的完整表格；③「被裁判拒绝的发现」小节在所有专项都没有拒绝记录时整节不输出（不再出现"无 | 无 | 无"占位行）。「规格重建」「去向未登记的候选发现」两个小节行为不变。
 
 ## [0.1.0] - 2026-08-27
 
