@@ -186,3 +186,14 @@ test('evaluateScopeGate：parseScopeDocument 报告 parseError 时门禁不通�
   assert.equal(gate.pass, false)
   assert.match(gate.reason, /解析失败/)
 })
+
+test('主流程：门禁依据改为 parseScopeDocument 解析的原始文档，不再直接信任 context 自报字段', () => {
+  const main = workflowSource.slice(workflowSource.indexOf("phase('准备')"))
+  assert.match(main, /const rawScope = await agent\(rawScopePrompt\(\)/)
+  assert.match(main, /const parsedScope = parseScopeDocument\(rawScope\)/)
+  assert.match(main, /const scopeGate = evaluateScopeGate\(parsedScope\)/)
+  assert.doesNotMatch(main, /evaluateScopeGate\(context\)/)
+  // 签字人/签字日期的下游引用（总报告元信息、轨迹归档）也必须改用解析结果，不能继续用 context 的自报字段
+  assert.doesNotMatch(main, /confirmedBy: context\.scopeConfirmedBy/)
+  assert.doesNotMatch(main, /confirmedAt: context\.scopeConfirmedAt/)
+})

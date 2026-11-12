@@ -717,6 +717,18 @@ const GLOBAL_SCHEMA = {
 // ---------------------------------------------------------------------------
 // 提示词构造函数
 // ---------------------------------------------------------------------------
+// 门禁判断不再信任 agent 自报的 scopeExists/unconfirmedAssumptions/scopeConfirmedBy/scopeConfirmedAt，
+// 改成一次机械的"原样读取"任务——风险远低于"读取并判断"，模型没有理由去改写或省略内容，
+// 这四个字段改由 parseScopeDocument 对这里取回的原始文本做正则解析。
+const RAW_SCOPE_SCHEMA = {
+  type: 'object',
+  properties: {
+    exists: { type: 'boolean', description: `${SCOPE_PATH} 是否真实存在。用 Read/cat 实地确认，不存在就填 false，禁止推测` },
+    content: { type: 'string', description: `${SCOPE_PATH} 的完整原始内容，一字不改地返回；exists=false 时填空字符串` },
+  },
+  required: ['exists', 'content'],
+}
+
 const CONTEXT_SCHEMA = {
   type: 'object',
   properties: {
@@ -732,6 +744,17 @@ const CONTEXT_SCHEMA = {
     summary: { type: 'string', description: '完整审计上下文摘要（六段，不超过 1500 字；第⑥段为文档与代码不一致要点）' },
   },
   required: ['scopeExists', 'unconfirmedAssumptions', 'scopeConfirmedBy', 'scopeConfirmedAt', 'summary'],
+}
+
+function rawScopePrompt() {
+  return `这是一次纯粹的文件读取任务，不要做任何总结、判断或概括。
+用 Read 工具读取仓库内 ${SCOPE_PATH} 的完整内容。
+
+- 文件存在：exists=true，content 填文件的完整原始文本（哪怕很长也要完整返回，禁止省略、改写或在中间插入你自己的说明）；
+- 文件不存在或读取失败：exists=false，content 填空字符串。
+
+不要解读文档里任何表格的含义，也不要自己判断"是否已经签字"——那是另一个步骤的工作，你只负责把原始内容原样搬出来。
+严格按 schema 返回 JSON。`
 }
 
 function contextPrompt() {
@@ -1013,15 +1036,17 @@ phase('准备')
 const context = await agent(contextPrompt(), { schema: CONTEXT_SCHEMA, label: '加载审计上下文' })
 
 // 范围文档门禁：硬前置，没有参数可以绕过。
-// 理由：L2 语义审计判断"代码行为 ≠ 业务意图"的能力，完全取决于它知不知道业务意图是什么。
-// 没有经人工签字的信任假设，AI 只能报模式化漏洞，还会把设计允许的管理员操作误报成漏洞。
-const scopeGate = evaluateScopeGate(context)
+// 门禁判断改为基于 rawScopePrompt 取回的原始文本，由 parseScopeDocument 纯函数用正则直接判断
+// （理由见该函数定义处的注释）。context 仍然保留，只用它的 scopeSummary/summary 做 L2 的上下文摘要。
+const rawScope = await agent(rawScopePrompt(), { schema: RAW_SCOPE_SCHEMA, label: '读取scope.md原始内容' })
+const parsedScope = parseScopeDocument(rawScope)
+const scopeGate = evaluateScopeGate(parsedScope)
 if (!scopeGate.pass) {
   log('⛔ 审计范围文档未就绪，本轮审计不启动：')
   log(scopeGate.reason)
   return { error: '审计范围文档未就绪', scopeGate }
 }
-log(`✅ 审计范围文档已就绪（确认人：${context.scopeConfirmedBy}，确认日期：${context.scopeConfirmedAt}）`)
+log(`✅ 审计范围文档已就绪（确认人：${parsedScope.scopeConfirmedBy}，确认日期：${parsedScope.scopeConfirmedAt}）`)
 
 let targets = args && args.targets && args.targets.length ? args.targets : null
 if (!targets) {
@@ -1080,7 +1105,7 @@ try {
     targets,
     categories,
     skipL3,
-    scope: { confirmedBy: context.scopeConfirmedBy, confirmedAt: context.scopeConfirmedAt },
+    scope: { confirmedBy: parsedScope.scopeConfirmedBy, confirmedAt: parsedScope.scopeConfirmedAt },
     l1,
     perTarget: valid,
     global: globalReport,
@@ -1106,7 +1131,7 @@ let traceArchive = { status: 'Failed', path: TRACE_ARCHIVE_PATH, error: '轨迹�
 try {
   const traceJson = JSON.stringify({
     note: '本文件由审计流水线自动生成，记录 L2 每个专项四个角色的输出与提示词指纹；与 audit-latest.md 配套阅读',
-    scope: { confirmedBy: context.scopeConfirmedBy, confirmedAt: context.scopeConfirmedAt },
+    scope: { confirmedBy: parsedScope.scopeConfirmedBy, confirmedAt: parsedScope.scopeConfirmedAt },
     contextSummaryFingerprint: promptFingerprint(context.summary || ''),
     categories: categories.map(c => c.key),
     targets: valid.map(r => ({ target: r.target, l2Trace: r.l2Trace || [] })),
