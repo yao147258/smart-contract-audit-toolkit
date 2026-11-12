@@ -469,3 +469,37 @@ test('computeGates：l1 highCount 非零时门禁不通过，即使证据齐备'
   assert.equal(gate.l1HighZero, false)
   assert.equal(gate.gatePass, false)
 })
+
+test('buildAuditSummaryMarkdown 渲染 unprovenCriticalCount 并在人工复核事项中列出', () => {
+  const markdown = buildAuditSummaryMarkdown({
+    targets: ['contracts/Vault.sol'],
+    l1: { highCount: 0 },
+    perTarget: [{
+      target: 'contracts/Vault.sol',
+      gate: { l1HighZero: true, criticalHighCount: 1, evidenceComplete: false, unprovenCriticalCount: 1, gatePass: false },
+      confirmedFindings: [{ title: '重入风险', severity: 'Critical', status: 'Confirmed' }],
+      pocResults: [{ findingTitle: '重入风险', status: 'Suspected', iterations: 5 }],
+      report: { summary: '仍有未证实发现' },
+    }],
+    global: { overview: '存在未证实的高危发现', readyForDelivery: false },
+  })
+
+  assert.match(markdown, /\| unprovenCriticalCount \| 1 \|/)
+  assert.match(markdown, /contracts\/Vault\.sol：有 1 条 Critical\/High 发现只有 Suspected（迭代耗尽仍无法证明）的 PoC 证据，门禁判定为未通过，需人工复核/)
+})
+
+test('buildAuditSummaryMarkdown：unprovenCriticalCount 为 0 时不在人工复核事项里出现相关条目', () => {
+  const markdown = buildAuditSummaryMarkdown({
+    targets: ['contracts/Vault.sol'],
+    l1: { highCount: 0 },
+    perTarget: [{
+      target: 'contracts/Vault.sol',
+      gate: { l1HighZero: true, criticalHighCount: 1, evidenceComplete: true, unprovenCriticalCount: 0, gatePass: true },
+      confirmedFindings: [{ title: '重入风险', severity: 'Critical', status: 'Confirmed' }],
+      pocResults: [{ findingTitle: '重入风险', status: 'Confirmed', iterations: 1 }],
+      report: { summary: '已证实' },
+    }],
+    global: { overview: '无阻断项', readyForDelivery: true },
+  })
+  assert.doesNotMatch(markdown, /只有 Suspected/)
+})

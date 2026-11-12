@@ -424,6 +424,7 @@ function renderL2TraceSections(l2Trace) {
         `| l1HighZero | ${booleanValue(gate.l1HighZero)} |`,
         `| criticalHighCount | ${markdownCell(gate.criticalHighCount)} |`,
         `| evidenceComplete | ${booleanValue(gate.evidenceComplete)} |`,
+        `| unprovenCriticalCount | ${markdownCell(gate.unprovenCriticalCount)} |`,
         `| gatePass | ${booleanValue(gate.gatePass)} |`, '',
         '#### 发现明细', '| 标题 | 严重度 | 状态 | 大白话说明 | 影响 | 可能性 | 攻击路径 | 最小补丁 |', '|---|---|---|---|---|---|---|---|')
       const findings = Array.isArray(result.confirmedFindings) ? result.confirmedFindings.filter(Boolean) : []
@@ -442,6 +443,7 @@ function renderL2TraceSections(l2Trace) {
   // 只有当全部合约一条都没有时，才输出单个"无"。
   const humanItems = perTarget.flatMap(result => {
     const report = result.report || {}
+    const gate = result.gate || {}
     const openItems = Array.isArray(report.openItemsForHuman) ? report.openItemsForHuman.filter(Boolean) : []
     const fpItems = Array.isArray(report.suggestedFalsePositiveEntries) ? report.suggestedFalsePositiveEntries.filter(Boolean) : []
     // L2 留痕暴露出来的问题由代码直接生成复核项，不依赖 L4 agent 记得提
@@ -452,9 +454,15 @@ function renderL2TraceSections(l2Trace) {
     const unaccountedItems = traces.flatMap(trace =>
       (Array.isArray(trace.unaccounted) ? trace.unaccounted : []).map(title => `L2 专项「${trace.label}」的候选发现「${title}」去向未登记（裁判输出里找不到同名条目），请核对是被改名还是被漏判`)
     )
+    // 门禁未通过的直接原因之一：Critical/High 发现只有 Suspected（迭代耗尽仍无法证明）的 PoC，
+    // 不是"没有问题"，必须人工看一眼
+    const unprovenItems = gate.unprovenCriticalCount > 0
+      ? [`有 ${gate.unprovenCriticalCount} 条 Critical/High 发现只有 Suspected（迭代耗尽仍无法证明）的 PoC 证据，门禁判定为未通过，需人工复核`]
+      : []
     return [
       ...failedItems.map(item => `${result.target || '未提供'}：${item}`),
       ...unaccountedItems.map(item => `${result.target || '未提供'}：${item}`),
+      ...unprovenItems.map(item => `${result.target || '未提供'}：${item}`),
       ...openItems.map(item => `${result.target || '未提供'}：${item}`),
       ...fpItems.map(item => `${result.target || '未提供'}：建议误报条目：${item}`),
     ]
