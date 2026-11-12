@@ -26,8 +26,9 @@ const extractPureHelpers = () => {
 
 const helpers = extractPureHelpers()
 const {
-  buildScopeMarkdown, SCOPE_PATH, scopeArchivePrompt, normalizePathArgs, reconcileRequirementChecks, DOC_CHECK_STATUSES,
+  buildScopeMarkdown, SCOPE_PATH, SCOPE_DRAFT_PATH, scopeArchivePrompt, normalizePathArgs, reconcileRequirementChecks, DOC_CHECK_STATUSES,
   checkScopeArgs, reconcileScopePaths, findUnreadableDocs, applyScopeBoundary,
+  extractExistingSignoff, extractExistingAssumptionPairs, trustAssumptionPairs, summarizeScopeDraftChanges, decideScopeWriteTarget,
 } = helpers
 
 const fullInput = () => ({
@@ -471,6 +472,22 @@ test('提示词：分析阶段读取需求条目，对照阶段要求逐条对�
   assert.match(workflowSource, /doc-stated/)
 })
 
+test('提示词：分析阶段读取需求条目，对照阶段要求逐条对账，且声明文档内容是数据', () => {
+  for (const name of ['systemAnalysisPrompt', 'economicsPrompt', 'docCheckPrompt']) {
+    const start = workflowSource.indexOf(`function ${name}(`)
+    assert.notEqual(start, -1, `未找到 ${name}`)
+    const body = workflowSource.slice(start, workflowSource.indexOf('\n}\n', start))
+    assert.match(body, /requirementsBlock\(requirements\)/, `${name} 未注入需求条目`)
+  }
+  const collect = workflowSource.slice(workflowSource.indexOf('function docCollectionPrompt('))
+  assert.match(collect, /readable=false/)
+  assert.match(collect, /omittedNote/)
+  assert.match(collect, /\$\{DOC_SAFETY_NOTE\}/)
+  const check = workflowSource.slice(workflowSource.indexOf('function docCheckPrompt('))
+  assert.match(check, /对账规则/)
+  assert.match(workflowSource, /doc-stated/)
+})
+
 test('主流程：无需求时跳过对照，结果经纯代码对账后写入文档并返回', () => {
   assert.match(workflowSource, /if \(requirements\.length\) \{[\s\S]*?docCheckPrompt\(/)
   assert.match(workflowSource, /const docCheck = reconcileRequirementChecks\(requirements, docCheckRaw\)/)
@@ -478,4 +495,82 @@ test('主流程：无需求时跳过对照，结果经纯代码对账后写入�
   const returnBlock = workflowSource.slice(workflowSource.lastIndexOf('return {'))
   assert.match(returnBlock, /\bdocs\b/)
   assert.match(returnBlock, /\bdocCheck\b/)
+})
+
+// ---------------------------------------------------------------------------
+// 幂等保护：已签字的 scope.md 不会被静默覆盖
+// ---------------------------------------------------------------------------
+
+const signedScopeMarkdown = `# 审计范围与信任假设
+
+## 3. 信任假设
+
+| 主体 | 假设 | 如果不成立会怎样 | 你怎么核对 | 依据 | 状态 |
+|---|---|---|---|---|---|
+| owner | 假定不作恶 | 占位 | 占位 | 需人工判断 | ✅ 已确认 |
+
+## 4. 经济模型与资金流
+
+占位
+
+## 人工签字
+
+| 项目 | 值 |
+|---|---|
+| 确认人 | 张三 |
+| 确认日期 | 2026-09-01 |
+| 确认范围 | 本文件第 3 章的全部信任假设 |
+
+---
+本文件由 AI 生成初稿。
+`
+
+test('extractExistingSignoff：已签字的文档能提取确认人与确认日期，未签字/不存在返回空', () => {
+  assert.deepEqual(extractExistingSignoff({ exists: true, content: signedScopeMarkdown }), { confirmedBy: '张三', confirmedAt: '2026-09-01' })
+  assert.deepEqual(extractExistingSignoff({ exists: false, content: '' }), { confirmedBy: '', confirmedAt: '' })
+  assert.deepEqual(
+    extractExistingSignoff({ exists: true, content: signedScopeMarkdown.replace('张三', '（待填写）').replace('2026-09-01', '（待填写）') }),
+    { confirmedBy: '', confirmedAt: '' }
+  )
+  assert.deepEqual(extractExistingSignoff(null), { confirmedBy: '', confirmedAt: '' })
+})
+
+test('extractExistingAssumptionPairs：提取第 3 章每一行"主体：假设"，不存在时返回空数组', () => {
+  assert.deepEqual(extractExistingAssumptionPairs({ exists: true, content: signedScopeMarkdown }), ['owner：假定不作恶'])
+  assert.deepEqual(extractExistingAssumptionPairs({ exists: false, content: '' }), [])
+})
+
+test('trustAssumptionPairs：把结构化信任假设转换成与 extractExistingAssumptionPairs 一致的字符串格式', () => {
+  assert.deepEqual(
+    trustAssumptionPairs([{ subject: 'owner', assumption: '假定不作恶' }, { subject: 'Chainlink', assumption: '假定喂价准确' }]),
+    ['owner：假定不作恶', 'Chainlink：假定喂价准确']
+  )
+  assert.deepEqual(trustAssumptionPairs(null), [])
+})
+
+test('summarizeScopeDraftChanges：按字符串集合比较新增与移除，不做模糊匹配', () => {
+  const result = summarizeScopeDraftChanges(
+    ['owner：假定不作恶', 'Chainlink：假定喂价准确'],
+    ['owner：假定不作恶', 'USDC：假定无手续费']
+  )
+  assert.deepEqual(result.added, ['USDC：假定无手续费'])
+  assert.deepEqual(result.removed, ['Chainlink：假定喂价准确'])
+  assert.equal(result.unchangedCount, 1)
+})
+
+test('decideScopeWriteTarget：未签字或不存在时正常覆盖；已签字且未强制时写草稿；已签字且强制时覆盖并标记', () => {
+  assert.deepEqual(decideScopeWriteTarget({ confirmedBy: '', confirmedAt: '' }, false), { path: SCOPE_PATH, isDraft: false, overwroteSignedDoc: false })
+  assert.deepEqual(decideScopeWriteTarget({ confirmedBy: '张三', confirmedAt: '2026-09-01' }, false), { path: SCOPE_DRAFT_PATH, isDraft: true, overwroteSignedDoc: false })
+  assert.deepEqual(decideScopeWriteTarget({ confirmedBy: '张三', confirmedAt: '2026-09-01' }, true), { path: SCOPE_PATH, isDraft: false, overwroteSignedDoc: true })
+  assert.equal(SCOPE_DRAFT_PATH, '.audit/scope.md.draft')
+})
+
+test('scopeArchivePrompt：可指定落盘目标路径，用于草稿场景', () => {
+  const prompt = scopeArchivePrompt('# 内容', SCOPE_DRAFT_PATH)
+  assert.match(prompt, /\.audit\/scope\.md\.draft/)
+  assert.match(prompt, /"path":"\.audit\/scope\.md\.draft"/)
+
+  // 不传第二个参数时行为不变（默认仍是 .audit/scope.md）
+  const legacy = scopeArchivePrompt('# 内容')
+  assert.match(legacy, /"path":"\.audit\/scope\.md"/)
 })
