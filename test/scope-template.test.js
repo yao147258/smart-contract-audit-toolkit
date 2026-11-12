@@ -472,22 +472,6 @@ test('提示词：分析阶段读取需求条目，对照阶段要求逐条对�
   assert.match(workflowSource, /doc-stated/)
 })
 
-test('提示词：分析阶段读取需求条目，对照阶段要求逐条对账，且声明文档内容是数据', () => {
-  for (const name of ['systemAnalysisPrompt', 'economicsPrompt', 'docCheckPrompt']) {
-    const start = workflowSource.indexOf(`function ${name}(`)
-    assert.notEqual(start, -1, `未找到 ${name}`)
-    const body = workflowSource.slice(start, workflowSource.indexOf('\n}\n', start))
-    assert.match(body, /requirementsBlock\(requirements\)/, `${name} 未注入需求条目`)
-  }
-  const collect = workflowSource.slice(workflowSource.indexOf('function docCollectionPrompt('))
-  assert.match(collect, /readable=false/)
-  assert.match(collect, /omittedNote/)
-  assert.match(collect, /\$\{DOC_SAFETY_NOTE\}/)
-  const check = workflowSource.slice(workflowSource.indexOf('function docCheckPrompt('))
-  assert.match(check, /对账规则/)
-  assert.match(workflowSource, /doc-stated/)
-})
-
 test('主流程：无需求时跳过对照，结果经纯代码对账后写入文档并返回', () => {
   assert.match(workflowSource, /if \(requirements\.length\) \{[\s\S]*?docCheckPrompt\(/)
   assert.match(workflowSource, /const docCheck = reconcileRequirementChecks\(requirements, docCheckRaw\)/)
