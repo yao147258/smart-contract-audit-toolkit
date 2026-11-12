@@ -77,6 +77,10 @@ function markdownCell(value) {
 // SCOPE_PATH 保持一致，改动时两处必须同步，否则本流水线会因为找不到文件而永久早退。
 /*@export*/ const SCOPE_PATH = '.audit/scope.md'
 
+// 状态列的唯一合法"已确认"值。这个值必须与 generate-scope-template.js 里的
+// CONFIRMED_MARK 保持一致，改动时两处必须同步（两个 workflow 脚本不能互相 import）。
+/*@export*/ const CONFIRMED_MARK = '✅ 已确认'
+
 // 范围文档门禁：纯函数，不调大模型，避免让 AI 给自己的前置条件打分。
 // 三条硬性条件（任一不满足即早退，且没有参数可以绕过）：
 //   ① .audit/scope.md 存在；
@@ -95,6 +99,9 @@ function markdownCell(value) {
   }
 
   const blockers = []
+  if (source.parseError) {
+    blockers.push(`${SCOPE_PATH} 解析失败：${source.parseError}（可能是表格被人工误删或格式被破坏，无法等同于"已签字"）`)
+  }
   const unconfirmed = Array.isArray(source.unconfirmedAssumptions) ? source.unconfirmedAssumptions.filter(Boolean) : []
   if (unconfirmed.length) {
     blockers.push(
@@ -110,6 +117,75 @@ function markdownCell(value) {
 
   if (blockers.length) return { pass: false, reason: blockers.join('\n') }
   return { pass: true, reason: '' }
+}
+
+// 门禁判断不再信任 agent 自报的 scopeExists/unconfirmedAssumptions/scopeConfirmedBy/scopeConfirmedAt——
+// 那四个字段此前来自一次"读取并理解文档结构"的语义任务，容错空间大（全角空格、多余空白都可能
+// 让"看起来像确认过了"被判断错）。改成两步：①agent 只做机械的"原样读取"（见 rawScopePrompt）；
+// ②这里用正则直接从原文解析，判断逻辑可被单测覆盖，不依赖模型每次都理解对。
+/*@export*/ function normalizeScopeCellText(cell) {
+  return String(cell || '')
+    .replace(/　/g, ' ') // 全角空格 → 半角
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// 提取 markdown 中某个二级标题小节的表格行（跳过表头与分隔行）。每行返回去掉首尾 | 后
+// 按 | 拆分、并做 normalizeScopeCellText 规整化的单元格数组。找不到该小节时返回 null。
+/*@export*/ function extractMarkdownSection(content, headingPattern) {
+  const source = typeof content === 'string' ? content : ''
+  const match = source.match(headingPattern)
+  if (!match) return null
+  const body = match[1] || ''
+  return body
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.startsWith('|') && line.endsWith('|'))
+    .map(line => line.slice(1, -1).split('|').map(normalizeScopeCellText))
+    .filter(cells => cells.length > 0 && !cells.every(c => /^:?-+:?$/.test(c)))
+}
+
+/*@export*/ function parseScopeDocument(raw) {
+  const source = raw || {}
+  const exists = source.exists === true
+  const content = typeof source.content === 'string' ? source.content : ''
+  const empty = { scopeExists: false, unconfirmedAssumptions: [], scopeConfirmedBy: '', scopeConfirmedAt: '', parseError: '' }
+  if (!exists || !content.trim()) return empty
+
+  const chapter3Rows = extractMarkdownSection(content, /##\s*3\.\s*信任假设([\s\S]*?)(?=\n##\s|\n---|$)/)
+  const signoffRows = extractMarkdownSection(content, /##\s*人工签字([\s\S]*?)(?=\n##\s|\n---|$)/)
+
+  const errors = []
+  const unconfirmedAssumptions = []
+  if (!chapter3Rows || chapter3Rows.length < 2) {
+    errors.push('未能解析出第 3 章「信任假设」的表格内容，文档结构可能被破坏')
+  } else {
+    // 第一行是表头（主体 | 假设 | ... | 状态），从第二行开始才是数据
+    chapter3Rows.slice(1).forEach(cells => {
+      const status = cells[cells.length - 1] || ''
+      const subject = cells[0] || ''
+      const assumption = cells[1] || ''
+      if (status !== CONFIRMED_MARK) {
+        unconfirmedAssumptions.push(`${subject}：${assumption}`)
+      }
+    })
+  }
+
+  const isPlaceholder = v => !v || v === '（待填写）' || v === '(待填写)'
+  let scopeConfirmedBy = ''
+  let scopeConfirmedAt = ''
+  if (!signoffRows || !signoffRows.length) {
+    errors.push('未能解析出文末「人工签字」的表格内容，文档结构可能被破坏')
+  } else {
+    signoffRows.forEach(cells => {
+      const key = cells[0] || ''
+      const value = cells[1] || ''
+      if (key === '确认人' && !isPlaceholder(value)) scopeConfirmedBy = value
+      if (key === '确认日期' && !isPlaceholder(value)) scopeConfirmedAt = value
+    })
+  }
+
+  return { scopeExists: true, unconfirmedAssumptions, scopeConfirmedBy, scopeConfirmedAt, parseError: errors.join('；') }
 }
 
 function listValue(values) {
